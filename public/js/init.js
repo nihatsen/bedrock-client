@@ -18,82 +18,107 @@ function recoverInterruptedStreams() {
 }
 
 function init() {
+  // 1. Recover streams (sync)
   recoverInterruptedStreams();
 
-  // Pre-populate model select with saved model so it's never empty
-  _prePopulateModelSelect();
+  // 2. Populate model select IMMEDIATELY from fallback — zero wait
+  _populateModelSelect(FALLBACK_MODELS);
 
+  // 3. Apply UI state (sync, instant)
   applySidebarState();
   applyThinkingState();
   initScrollWatcher();
 
+  // 4. Render conversations (sync, instant — from localStorage)
   renderChatList();
   if (conversations.length > 0) loadConvo(conversations[0].id);
   else newChat();
 
+  // 5. Settings form (sync)
   syncSettingsForm();
+
+  // 6. Input handlers (sync)
   initDragDrop();
   initPaste();
 
-  // Load models in background — will replace pre-populated option
-  loadModels().catch(e => console.warn('[init] Model load failed:', e));
+  // 7. Background: fetch live model list and silently swap
+  //    No await — does NOT block anything above
+  _loadModelsBackground();
 
+  // 8. API key prompt
   setTimeout(() => { if (!settings.apiKey) openSettings(); }, 300);
 }
 
-// Show saved model immediately so the select is never empty
-function _prePopulateModelSelect() {
+// ─── Populate select from a model array ───────────────────────────────────
+function _populateModelSelect(models) {
   const sel = document.getElementById('modelSelect');
   if (!sel) return;
 
   const savedId = settings.modelId || DEFAULT_MODEL;
-  // If select already has options, skip
-  if (sel.options.length > 0) return;
+  sel.innerHTML = '';
 
-  const opt = document.createElement('option');
-  opt.value = savedId;
-  // Make a readable name from the ID
-  opt.textContent = savedId
-    .replace(/^(global|us|eu|ap)\./i, (m) => `(${m.replace('.','').toUpperCase()}) `)
-    .replace(/^anthropic\./, '')
-    .replace(/^meta\./, '')
-    .replace(/^amazon\./, '')
-    .replace(/-/g, ' ')
-    .replace(/\b\w/g, c => c.toUpperCase())
-    .replace(/\s*V\d.*$/, '')
-    .trim() + ' (loading…)';
-  opt.selected = true;
-  sel.appendChild(opt);
+  models.forEach(m => {
+    const opt = document.createElement('option');
+    opt.value = m.id;
+    opt.textContent = m.name;
+    opt.dataset.supportsThinking = m.supportsThinking;
+    opt.dataset.maxOutputTokens  = m.maxOutputTokens || 32000;
+    if (m.id === savedId) opt.selected = true;
+    sel.appendChild(opt);
+  });
+
+  // If saved model not found, select first
+  if (sel.selectedIndex < 0 && sel.options.length > 0) sel.selectedIndex = 0;
+
   onModelChange();
 }
 
+// ─── Background model fetch — swaps list when ready, no flash ─────────────
+async function _loadModelsBackground() {
+  if (!settings.apiKey) return; // No key → fallback is fine, skip fetch
+
+  try {
+    const headers = {};
+    if (settings.apiKey) headers['x-api-key'] = settings.apiKey;
+    if (settings.region) headers['x-region']  = settings.region;
+
+    const res = await fetch('/api/models', { headers });
+    if (!res.ok) return;
+
+    const data = await res.json();
+    const models = data.models || [];
+    if (!models.length) return;
+
+    // Only swap if we got more/different models than the fallback
+    if (models.length > FALLBACK_MODELS.length || data.source === 'bedrock') {
+      console.log(`[models] Live list loaded: ${models.length} models (${data.source})`);
+      _populateModelSelect(models);
+    }
+  } catch (e) {
+    // Silently ignore — fallback list stays
+    console.warn('[models] Background fetch failed, using fallback:', e.message);
+  }
+}
+
+// ─── Public loadModels (called from settings when credentials change) ──────
 async function loadModels() {
   try {
     const headers = {};
     if (settings.apiKey) headers['x-api-key'] = settings.apiKey;
-    if (settings.region) headers['x-region'] = settings.region;
+    if (settings.region) headers['x-region']  = settings.region;
 
     const res = await fetch('/api/models', { headers });
     const data = await res.json();
     const models = data.models || [];
 
-    if (data.source && data.source !== 'fallback') {
-      console.log(`[models] Loaded ${models.length} models from ${data.source}`);
+    if (models.length) {
+      _populateModelSelect(models);
+      console.log(`[models] Reloaded: ${models.length} models`);
     }
-
-    const sel = document.getElementById('modelSelect');
-    sel.innerHTML = '';
-    models.forEach(m => {
-      const opt = document.createElement('option');
-      opt.value = m.id;
-      opt.textContent = m.name;
-      opt.dataset.supportsThinking = m.supportsThinking;
-      opt.dataset.maxOutputTokens = m.maxOutputTokens || 32000;
-      if (m.id === (settings.modelId || DEFAULT_MODEL)) opt.selected = true;
-      sel.appendChild(opt);
-    });
-    onModelChange();
-  } catch (e) { console.error('loadModels:', e); }
+  } catch (e) {
+    console.error('loadModels:', e);
+    toast('Could not reload models', 'error');
+  }
 }
 
 document.addEventListener('keydown', e => {

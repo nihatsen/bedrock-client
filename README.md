@@ -1,3 +1,5 @@
+Talk with Claude Opus 4.6, or any priced AI models with your AWS Bedrock API key using your free AWS Credits for a LONG TIME 😍😍😘
+
 # Bedrock Claude Chat
 
 Full-featured Claude chat app via Amazon Bedrock — with extended thinking, file uploads, image support, streaming, and a polished dark UI.
