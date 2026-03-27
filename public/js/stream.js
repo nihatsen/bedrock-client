@@ -308,6 +308,8 @@ function handleSSE(ev, convoId, msg, budget) {
 
   if (ev.type === 'usage') {
     msg.usage = { inputTokens:ev.usage?.inputTokens, outputTokens:ev.usage?.outputTokens };
+    // Record for token counter
+    recordTokenUsage(msg.usage.inputTokens, msg.usage.outputTokens);
     if (!isCur) return;
     const row=getRow(); if(!row) return;
     const hdr=row.querySelector('.msg-header');
@@ -315,6 +317,7 @@ function handleSSE(ev, convoId, msg, budget) {
     if (!u&&hdr) { u=document.createElement('span');u.className='msg-usage';hdr.insertBefore(u,hdr.querySelector('.msg-actions')); }
     if (u) u.textContent=`${ev.usage?.inputTokens||0}↑ ${ev.usage?.outputTokens||0}↓`;
   }
+
 
   if (ev.type === 'error') {
     msg._error = ev.message;

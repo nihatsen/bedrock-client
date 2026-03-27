@@ -14,21 +14,60 @@ function _cachedRenderMd(key, text) {
     _mdCache.delete(_mdCache.keys().next().value);
   return html;
 }
-
 function invalidateMdCache(msgId) {
-  _mdCache.delete(msgId);
-  _mdCache.delete(msgId + '_stream');
+  _mdCache.delete(msgId); _mdCache.delete(msgId + '_stream');
 }
 function clearMdCache() { _mdCache.clear(); }
 
-// ─── renderMessages ────────────────────────────────────────────────────────
-// Builds all rows off-DOM in a DocumentFragment → single append → scroll.
-// No batching, no race conditions, no mid-render scroll jumps.
+// ─── Lazy code block highlighting via IntersectionObserver ─────────────────
+// Code blocks are only highlighted when they scroll into view.
+// This makes chat switching instant regardless of how many code blocks exist.
+let _codeBlockObserver = null;
+
+function _getCodeBlockObserver() {
+  if (_codeBlockObserver) return _codeBlockObserver;
+  _codeBlockObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (!entry.isIntersecting) return;
+      const row = entry.target;
+      _processRowCodeBlocks(row);
+      _codeBlockObserver.unobserve(row);
+    });
+  }, {
+    root: document.getElementById('messagesWrap'),
+    rootMargin: '200px 0px', // pre-load 200px above/below viewport
+    threshold: 0,
+  });
+  return _codeBlockObserver;
+}
+
+function _processRowCodeBlocks(row) {
+  const textEl = row.querySelector('.msg-text');
+  const msgId  = row.dataset.msgId;
+  if (!textEl || !msgId) return;
+  const msg = _findMsg(msgId);
+  if (!msg || msg._error) return;
+  // Process code blocks (highlight, wrap, etc.)
+  processCodeBlocks(textEl, msg.text);
+  // File list
+  const body = row.querySelector('.msg-body');
+  if (body && !row.querySelector('.file-list')) {
+    const fl = buildFileList(body);
+    if (fl) row.appendChild(fl);
+  }
+  row.dataset.codeProcessed = '1';
+}
+
+function _findMsg(msgId) {
+  if (!currentConvoId) return null;
+  return getConvo(currentConvoId)?.messages.find(m => m.id === msgId) || null;
+}
+
+// ─── renderMessages — DocumentFragment, single DOM write ──────────────────
 function renderMessages(messages, activeStreamId = null) {
   const wrap  = document.getElementById('messagesWrap');
   const empty = document.getElementById('emptyState');
 
-  // Remove existing rows
   wrap.querySelectorAll('.msg-row').forEach(r => r.remove());
 
   if (!messages.length) {
@@ -37,34 +76,22 @@ function renderMessages(messages, activeStreamId = null) {
   }
   empty.style.display = 'none';
 
-  // Build everything off-DOM
+  const obs = _getCodeBlockObserver();
   const frag = document.createDocumentFragment();
-  messages.forEach(m => frag.appendChild(appendMsgEl(m, m.id === activeStreamId, true)));
 
-  // Single DOM write
-  wrap.appendChild(frag);
-
-  // Process code blocks for finalized assistant messages (deferred, non-blocking)
-  requestAnimationFrame(() => {
-    wrap.querySelectorAll('.msg-row.assistant:not(.streaming)').forEach(row => {
-      const textEl = row.querySelector('.msg-text');
-      const msgId  = row.dataset.msgId;
-      if (textEl && msgId) {
-        const msg = _findMsg(msgId);
-        if (msg && !msg._error) processCodeBlocks(textEl, msg.text);
-      }
-    });
-    // File lists
-    wrap.querySelectorAll('.msg-row.assistant:not(.streaming)').forEach(row => {
-      const body = row.querySelector('.msg-body');
-      if (body && !row.querySelector('.file-list')) {
-        const fl = buildFileList(body);
-        if (fl) row.appendChild(fl);
-      }
-    });
+  messages.forEach(m => {
+    const row = appendMsgEl(m, m.id === activeStreamId, true);
+    frag.appendChild(row);
   });
 
-  // Scroll to bottom after DOM write
+  wrap.appendChild(frag);
+
+  // Observe assistant rows for lazy code block processing
+  wrap.querySelectorAll('.msg-row.assistant:not(.streaming):not([data-code-processed])').forEach(row => {
+    obs.observe(row);
+  });
+
+  // Scroll to bottom
   requestAnimationFrame(() => {
     wrap.scrollTop = wrap.scrollHeight;
     userScrolledUp = false;
@@ -72,15 +99,7 @@ function renderMessages(messages, activeStreamId = null) {
   });
 }
 
-function _findMsg(msgId) {
-  if (!currentConvoId) return null;
-  const convo = typeof getConvo === 'function' ? getConvo(currentConvoId) : null;
-  return convo?.messages.find(m => m.id === msgId) || null;
-}
-
 // ─── appendMsgEl ──────────────────────────────────────────────────────────
-// When appendToDOM=false (default), appends to #messagesWrap.
-// When appendToDOM=true, just returns the element (for fragment building).
 function appendMsgEl(msg, isStreaming = false, returnOnly = false) {
   const row = document.createElement('div');
   row.className = `msg-row ${msg.role}${isStreaming ? ' streaming' : ''}`;
@@ -89,7 +108,6 @@ function appendMsgEl(msg, isStreaming = false, returnOnly = false) {
   const modelLabel = msg.role === 'assistant'
     ? (msg.modelName || currentModelName || 'Assistant') : null;
 
-  // Header
   const header = document.createElement('div');
   header.className = 'msg-header';
   header.innerHTML = `
@@ -125,11 +143,9 @@ function appendMsgEl(msg, isStreaming = false, returnOnly = false) {
   }
   header.appendChild(actions);
 
-  // Body
   const body = document.createElement('div');
   body.className = 'msg-body';
 
-  // Files
   if (msg.files?.length) {
     const chips = document.createElement('div'); chips.className = 'file-chips';
     msg.files.forEach(f => {
@@ -147,7 +163,6 @@ function appendMsgEl(msg, isStreaming = false, returnOnly = false) {
     body.appendChild(chips);
   }
 
-  // Text
   const textEl = document.createElement('div');
   textEl.className = 'msg-text';
 
@@ -164,12 +179,17 @@ function appendMsgEl(msg, isStreaming = false, returnOnly = false) {
       ind.innerHTML = '<span class="stream-spinner-sm"></span><span class="stream-cursor"></span>';
       textEl.appendChild(ind);
     } else {
-      // Use cached markdown — no re-processing on every chat switch
+      // Use cached markdown — no re-parse on chat switch
       textEl.innerHTML = _cachedRenderMd(msg.id, msg.text || '');
-      // Code blocks processed in batch after all rows appended (see renderMessages)
-      // but for single-message appends (new messages), process immediately
+      // Code blocks processed lazily by IntersectionObserver (see renderMessages)
+      // For individually appended messages (new messages), process immediately when visible
       if (!returnOnly) {
-        requestAnimationFrame(() => processCodeBlocks(textEl, msg.text));
+        requestAnimationFrame(() => {
+          processCodeBlocks(textEl, msg.text);
+          const fl = buildFileList(body);
+          if (fl) row.appendChild(fl);
+          row.dataset.codeProcessed = '1';
+        });
       }
     }
   } else {
@@ -177,7 +197,6 @@ function appendMsgEl(msg, isStreaming = false, returnOnly = false) {
   }
   body.appendChild(textEl);
 
-  // Stop badge
   if (msg.stopReason && !isStreaming) {
     const sb = document.createElement('div');
     sb.className = `stop-badge ${msg.stopReason}`;
@@ -185,26 +204,16 @@ function appendMsgEl(msg, isStreaming = false, returnOnly = false) {
     body.appendChild(sb);
   }
 
-  // Thinking block
-  if (msg.thinking != null) {
+  if (msg.thinking != null)
     body.appendChild(buildThinkingBlock(msg.thinking, isStreaming, msg._thinkingBudget));
-  }
 
   row.appendChild(header);
   row.appendChild(body);
 
   if (!returnOnly) {
-    const wrap  = document.getElementById('messagesWrap');
+    const wrap = document.getElementById('messagesWrap');
     document.getElementById('emptyState').style.display = 'none';
     wrap.appendChild(row);
-    // Immediate code block processing for individually appended messages
-    if (msg.role === 'assistant' && !isStreaming && !msg._error) {
-      requestAnimationFrame(() => {
-        processCodeBlocks(textEl, msg.text);
-        const fl = buildFileList(body);
-        if (fl) row.appendChild(fl);
-      });
-    }
   }
 
   return row;
@@ -213,13 +222,9 @@ function appendMsgEl(msg, isStreaming = false, returnOnly = false) {
 // ─── finalizeMsgEl ─────────────────────────────────────────────────────────
 function finalizeMsgEl(msg) {
   const row = document.querySelector(`[data-msg-id="${msg.id}"]`);
-  if (!row) {
-    // Row not in DOM yet — invalidate partial cache so next render gets full content
-    invalidateMdCache(msg.id);
-    return;
-  }
+  if (!row) { invalidateMdCache(msg.id); return; }
 
-  // Remove ALL streaming artifacts reliably
+  // Remove ALL streaming artifacts
   row.classList.remove('streaming');
   row.querySelectorAll('.stream-indicator, .stream-cursor, .stream-spinner-sm').forEach(el => el.remove());
 
@@ -227,9 +232,7 @@ function finalizeMsgEl(msg) {
   const textEl = row.querySelector('.msg-text');
   if (!textEl) return;
 
-  // Remove stream indicator from textEl specifically
   textEl.querySelector('.stream-indicator')?.remove();
-
   _mdCache.delete(msg.id + '_stream');
 
   if (msg._error) {
@@ -238,15 +241,14 @@ function finalizeMsgEl(msg) {
     return;
   }
 
-  // Render and cache final markdown
   const html = renderMd(msg.text || '');
   _mdCache.set(msg.id, html);
   textEl.innerHTML = html;
   processCodeBlocks(textEl, msg.text);
+  row.dataset.codeProcessed = '1';
 
   const thinkingEl = body.querySelector('.thinking-block');
 
-  // Stop badge
   if (msg.stopReason) {
     body.querySelector('.stop-badge')?.remove();
     const sb = document.createElement('div');
@@ -256,22 +258,20 @@ function finalizeMsgEl(msg) {
     else body.appendChild(sb);
   }
 
-  // Finalize thinking block
   if (msg.thinking) {
     const tb = body.querySelector('.thinking-block');
     if (tb) {
-      tb.querySelectorAll('.thinking-cursor, .thinking-progress').forEach(el => el.remove());
+      tb.querySelectorAll('.thinking-cursor,.thinking-progress').forEach(el => el.remove());
       const ic = tb.querySelector('.thinking-spinner'); if (ic) ic.className = 'thinking-dot';
       const sl = tb.querySelector('.thinking-header-text');
-      if (sl) {
-        const est = Math.round(msg.thinking.length / 4);
-        sl.textContent = `REASONING — ${tokStr(est)} est. tokens`;
-      }
+      if (sl) { const est = Math.round(msg.thinking.length/4); sl.textContent = `REASONING — ${tokStr(est)} est. tokens`; }
+      // Update topic to final state
+      const tl = tb.querySelector('.thinking-topic');
+      if (tl) { tl.textContent = ''; tl.style.display = 'none'; }
       if (!tb.classList.contains('collapsed')) tb.classList.add('collapsed');
     }
   }
 
-  // File list
   row.querySelector('.file-list')?.remove();
   requestAnimationFrame(() => {
     const fl = buildFileList(body);
@@ -279,7 +279,6 @@ function finalizeMsgEl(msg) {
   });
 }
 
-// ─── buildErrorHTML ────────────────────────────────────────────────────────
 function buildErrorHTML(err, msgId) {
   const c = document.createElement('div'); c.className = 'msg-error';
   const e = document.createElement('div'); e.className = 'err-text'; e.textContent = '⚠ ' + err;
@@ -296,9 +295,8 @@ document.addEventListener('click', function(e) {
   retryMessage(btn.dataset.retryMsgId);
 });
 
-// ─── Edit / Delete / Retry ─────────────────────────────────────────────────
 function editMessage(msgId) {
-  if (streamRegistry.has(currentConvoId)) { toast('Stop current response first', 'error'); return; }
+  if (streamRegistry.has(currentConvoId)) { toast('Stop current response first','error'); return; }
   const convo = getConvo(currentConvoId);
   const msg   = convo?.messages.find(m => m.id === msgId);
   const row   = document.querySelector(`[data-msg-id="${msgId}"]`);
@@ -309,19 +307,18 @@ function editMessage(msgId) {
 
   const ta = document.createElement('textarea');
   ta.className = 'msg-edit-textarea'; ta.value = msg.text || '';
-  setTimeout(() => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; }, 0);
-  ta.oninput = () => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; };
+  setTimeout(() => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight+'px'; }, 0);
+  ta.oninput = () => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight+'px'; };
 
   const saveBtn = document.createElement('button');
   saveBtn.className = 'msg-edit-save'; saveBtn.textContent = '✓ Save & Resend';
   saveBtn.onclick = () => {
     const t = ta.value.trim();
-    if (!t) { toast('Cannot be empty', 'error'); return; }
+    if (!t) { toast('Cannot be empty','error'); return; }
     msg.text = t;
     invalidateMdCache(msgId);
-    convo.messages.splice(convo.messages.indexOf(msg) + 1);
-    saveConvos();
-    renderMessages(convo.messages);
+    convo.messages.splice(convo.messages.indexOf(msg)+1);
+    saveConvos(); renderMessages(convo.messages);
     runStream(currentConvoId);
   };
 
@@ -330,41 +327,40 @@ function editMessage(msgId) {
   cancelBtn.onclick = () => { textEl.innerHTML = origHTML; };
 
   ta.onkeydown = e => {
-    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); saveBtn.click(); }
-    if (e.key === 'Escape') { e.preventDefault(); cancelBtn.click(); }
+    if ((e.metaKey||e.ctrlKey) && e.key==='Enter') { e.preventDefault(); saveBtn.click(); }
+    if (e.key==='Escape') { e.preventDefault(); cancelBtn.click(); }
   };
 
-  const wrap = document.createElement('div'); wrap.className = 'msg-edit-wrap';
-  const acts = document.createElement('div'); acts.className = 'msg-edit-actions';
+  const wrap2 = document.createElement('div'); wrap2.className = 'msg-edit-wrap';
+  const acts  = document.createElement('div'); acts.className = 'msg-edit-actions';
   acts.appendChild(saveBtn); acts.appendChild(cancelBtn);
-  wrap.appendChild(ta); wrap.appendChild(acts);
-  textEl.innerHTML = ''; textEl.appendChild(wrap);
+  wrap2.appendChild(ta); wrap2.appendChild(acts);
+  textEl.innerHTML = ''; textEl.appendChild(wrap2);
   ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
 }
 
 function deleteMessagePair(userMsgId) {
   const convo = getConvo(currentConvoId);
-  if (!convo || streamRegistry.has(currentConvoId)) { toast('Stop current response first', 'error'); return; }
+  if (!convo || streamRegistry.has(currentConvoId)) { toast('Stop current response first','error'); return; }
   const idx = convo.messages.findIndex(m => m.id === userMsgId);
   if (idx === -1) return;
-  const count = convo.messages[idx + 1]?.role === 'assistant' ? 2 : 1;
-  convo.messages.slice(idx, idx + count).forEach(m => invalidateMdCache(m.id));
+  const count = convo.messages[idx+1]?.role === 'assistant' ? 2 : 1;
+  convo.messages.slice(idx, idx+count).forEach(m => invalidateMdCache(m.id));
   convo.messages.splice(idx, count);
-  saveConvos();
-  renderMessages(convo.messages);
+  saveConvos(); renderMessages(convo.messages);
 }
 
 function retryMessage(aId) {
   const convo = getConvo(currentConvoId);
-  if (!convo || streamRegistry.has(currentConvoId)) { toast('Stop current response first', 'error'); return; }
+  if (!convo || streamRegistry.has(currentConvoId)) { toast('Stop current response first','error'); return; }
   const idx = convo.messages.findIndex(m => m.id === aId);
   if (idx === -1) return;
   convo.messages.slice(idx).forEach(m => invalidateMdCache(m.id));
   convo.messages.splice(idx);
   saveConvos();
   renderMessages(convo.messages);
-  const last = convo.messages[convo.messages.length - 1];
-  if (!last || last.role !== 'user') { toast('Nothing to retry', 'error'); return; }
+  const last = convo.messages[convo.messages.length-1];
+  if (!last || last.role !== 'user') { toast('Nothing to retry','error'); return; }
   runStream(currentConvoId);
 }
 

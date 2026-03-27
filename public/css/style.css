@@ -43,16 +43,17 @@
   --sp-gutter-w: 44px;
 }
 
-/* ─── PERFORMANCE: CSS containment — isolate reflows ─────────────────────── */
+/* ─── Performance containment ─────────────────────────────────────────────── */
 .messages        { contain: strict; will-change: scroll-position; }
 .msg-row         { contain: layout style; }
 .side-panel-body { contain: strict; will-change: scroll-position; }
-#spCodeWrap      { contain: layout size; }
+#spCodeWrap      { contain: size layout; position: relative; }
 .stream-wrap     { contain: layout style; }
 .chat-list       { contain: strict; will-change: scroll-position; }
 .topbar          { contain: layout style size; }
 .sidebar         { contain: layout style; }
 .input-area      { contain: layout style; }
+
 
 /* ─── PERFORMANCE: CSS containment stops reflows crossing boundaries ─────── */
 
@@ -505,7 +506,54 @@ pre:hover > .code-simple-actions { opacity: 1; }
 #spCodeWrap { min-height: 100%; position: relative; }
 #spCodeWrap::before { content: ''; position: absolute; top: 0; bottom: 0; left: 0; width: var(--sp-gutter-w); background: rgba(0,0,0,0.2); border-right: 1px solid var(--border); pointer-events: none; }
 
-.sp-code-table { border-collapse: collapse; width: 100%; font-family: var(--mono); font-size: 13px; line-height: 1.65; position: relative; z-index: 1; }
+/* ─── Side panel code table — table-layout:fixed eliminates per-scroll column recalc ── */
+.sp-code-table {
+  border-collapse: collapse;
+  /* CRITICAL: fixed layout means browser never measures cell content widths */
+  table-layout: fixed;
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.65;
+  /* Table is absolutely positioned — parent sets height for scrollbar */
+  position: absolute;
+  left: 0; right: 0; top: 0;
+  will-change: transform;
+}
+.sp-line-num {
+  vertical-align: top;
+  text-align: right;
+  white-space: nowrap;
+  user-select: none;
+  /* Fixed width column — no measurement needed */
+  width: var(--sp-gutter-w);
+  padding: 0 10px 0 16px;
+  color: var(--text3);
+  background: rgba(0,0,0,0.2);
+  border-right: 1px solid var(--border);
+  /* Prevent text overflow from breaking layout */
+  overflow: hidden;
+}
+.sp-line-code {
+  vertical-align: top;
+  padding: 0 20px 0 14px;
+  white-space: pre;
+  word-break: normal;
+  /* Takes remaining width */
+  width: auto;
+  overflow: hidden;
+}
+.sp-line:first-child .sp-line-num,
+.sp-line:first-child .sp-line-code { padding-top: 16px; }
+.sp-line:last-child .sp-line-num,
+.sp-line:last-child .sp-line-code  { padding-bottom: 16px; }
+
+.side-panel-body.wrap-on { overflow-x: hidden; }
+.side-panel-body.wrap-on .sp-line-code {
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow: visible;
+}
 .sp-line-num { vertical-align: top; text-align: right; white-space: nowrap; user-select: none; width: 1%; min-width: var(--sp-gutter-w); padding: 0 10px 0 16px; color: var(--text3); background: rgba(0,0,0,0.2); border-right: 1px solid var(--border); }
 .sp-line-code { vertical-align: top; padding: 0 20px 0 14px; white-space: pre; word-break: normal; width: 100%; }
 

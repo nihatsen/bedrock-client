@@ -14,7 +14,7 @@ let _wrapOn            = true;
 let _liveUpdateTimer   = null;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// WORKER — highlight + split lines off main thread
+// WORKER — highlight + split entirely off main thread
 // ═══════════════════════════════════════════════════════════════════════════
 
 const _WORKER_SRC = `
@@ -92,8 +92,7 @@ function _syncHighlightAndSplit(code, lang) {
   const lines = []; let line = '', openTags = [], i = 0;
   while (i < html.length) {
     if (html[i] === '<') {
-      const end = html.indexOf('>', i);
-      if (end === -1) { line += html[i++]; continue; }
+      const end = html.indexOf('>', i); if (end === -1) { line += html[i++]; continue; }
       const tag = html.slice(i, end+1), isClose = tag.startsWith('</');
       if (!isClose) { if (!tag.endsWith('/>')) openTags.push(tag); line += tag; }
       else { openTags.pop(); line += tag; }
@@ -120,12 +119,12 @@ function _processAsync(code, lang) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// VIRTUAL SCROLL
+// VIRTUAL SCROLL — absolute positioning, no spacer rows, table-layout:fixed
 // ═══════════════════════════════════════════════════════════════════════════
 
 const VS_ROW_H  = 21.45;
 const VS_PAD    = 16;
-const VS_BUFFER = 25;
+const VS_BUFFER = 20;
 
 let _vsLines     = [];
 let _vsHash      = '';
@@ -133,6 +132,27 @@ let _vsLastFirst = -1;
 let _vsLastLast  = -1;
 let _vsRafId     = 0;
 let _vsSuspended = false;
+let _vsTotalH    = 0;
+
+// Persistent table elements — reused across renders, no recreate overhead
+let _vsTable  = null;
+let _vsTbody  = null;
+
+function _vsEnsureTable() {
+  const wrap = document.getElementById('spCodeWrap');
+  if (!wrap) return false;
+  if (_vsTable && wrap.contains(_vsTable)) return true;
+
+  _vsTable = document.createElement('table');
+  _vsTable.className = 'sp-code-table';
+  _vsTable.style.cssText = 'position:absolute;left:0;right:0;top:0;margin:0;';
+
+  _vsTbody = document.createElement('tbody');
+  _vsTable.appendChild(_vsTbody);
+  wrap.innerHTML = '';
+  wrap.appendChild(_vsTable);
+  return true;
+}
 
 function _fastHash(s) {
   let h = 0;
@@ -141,11 +161,12 @@ function _fastHash(s) {
   return h + '_' + s.length;
 }
 
+// ─── Core render: repositions table + rebuilds only visible rows ───────────
 function _vsRenderWindow() {
   if (_vsSuspended) return;
   const body = document.getElementById('sidePanelBody');
-  const wrap = document.getElementById('spCodeWrap');
-  if (!body || !wrap || !_vsLines.length) return;
+  if (!body || !_vsLines.length) return;
+  if (!_vsEnsureTable()) return;
 
   const scrollTop = body.scrollTop;
   const clientH   = body.clientHeight;
@@ -154,21 +175,78 @@ function _vsRenderWindow() {
   const first = Math.max(0, Math.floor((scrollTop - VS_PAD) / VS_ROW_H) - VS_BUFFER);
   const last  = Math.min(total - 1, Math.ceil((scrollTop + clientH - VS_PAD) / VS_ROW_H) + VS_BUFFER);
 
+  // Skip DOM write if range unchanged
   if (first === _vsLastFirst && last === _vsLastLast) return;
+
+  const prevFirst = _vsLastFirst;
+  const prevLast  = _vsLastLast;
   _vsLastFirst = first;
   _vsLastLast  = last;
 
-  const topH    = (VS_PAD + first * VS_ROW_H).toFixed(1);
-  const bottomH = Math.max(0, (total - 1 - last) * VS_ROW_H + VS_PAD).toFixed(1);
+  // Reposition table using transform (no layout, GPU only)
+  const topOffset = VS_PAD + first * VS_ROW_H;
+  _vsTable.style.transform = `translateY(${topOffset.toFixed(1)}px)`;
 
-  const parts = ['<table class="sp-code-table"><tbody>'];
-  if (+topH > 0) parts.push(`<tr class="sp-spacer"><td colspan="2" style="height:${topH}px"></td></tr>`);
-  for (let i = first; i <= last; i++) {
-    parts.push(`<tr class="sp-line"><td class="sp-line-num">${i+1}</td><td class="sp-line-code">${_vsLines[i]||'\u200B'}</td></tr>`);
+  const newCount  = last - first + 1;
+  const prevCount = prevFirst === -1 ? 0 : prevLast - prevFirst + 1;
+  const rows      = _vsTbody.rows;
+
+  if (
+    prevFirst === -1 ||
+    first > prevLast + 1 ||
+    last  < prevFirst - 1 ||
+    newCount !== prevCount
+  ) {
+    // Full rebuild — range changed completely or size changed
+    // Build as HTML string (fastest for initial fill)
+    let html = '';
+    for (let i = first; i <= last; i++) {
+      html += `<tr class="sp-line"><td class="sp-line-num">${i+1}</td><td class="sp-line-code">${_vsLines[i]||'\u200B'}</td></tr>`;
+    }
+    _vsTbody.innerHTML = html;
+  } else {
+    // Incremental update — reuse existing rows, only touch edges
+
+    // Rows scrolled in from top
+    if (first < prevFirst) {
+      const frag = document.createDocumentFragment();
+      for (let i = first; i < prevFirst; i++) {
+        const tr = document.createElement('tr');
+        tr.className = 'sp-line';
+        tr.innerHTML = `<td class="sp-line-num">${i+1}</td><td class="sp-line-code">${_vsLines[i]||'\u200B'}</td>`;
+        frag.appendChild(tr);
+      }
+      _vsTbody.insertBefore(frag, rows[0]);
+    }
+
+    // Rows scrolled in from bottom
+    if (last > prevLast) {
+      const frag = document.createDocumentFragment();
+      for (let i = prevLast + 1; i <= last; i++) {
+        const tr = document.createElement('tr');
+        tr.className = 'sp-line';
+        tr.innerHTML = `<td class="sp-line-num">${i+1}</td><td class="sp-line-code">${_vsLines[i]||'\u200B'}</td>`;
+        frag.appendChild(tr);
+      }
+      _vsTbody.appendChild(frag);
+    }
+
+    // Remove rows that scrolled out from top
+    const removeTop = first - prevFirst;
+    if (removeTop > 0) {
+      for (let i = 0; i < removeTop && rows.length > 0; i++) {
+        _vsTbody.removeChild(rows[0]);
+      }
+    }
+
+    // Remove rows that scrolled out from bottom
+    const removeBottom = prevLast - last;
+    if (removeBottom > 0) {
+      for (let i = 0; i < removeBottom && rows.length > 0; i++) {
+        _vsTbody.removeChild(rows[rows.length - 1]);
+      }
+    }
   }
-  if (+bottomH > 0) parts.push(`<tr class="sp-spacer"><td colspan="2" style="height:${bottomH}px"></td></tr>`);
-  parts.push('</tbody></table>');
-  wrap.innerHTML = parts.join('');
 }
 
 function _vsScheduleRender() {
@@ -180,15 +258,10 @@ function _vsCancelRender() {
   if (_vsRafId) { cancelAnimationFrame(_vsRafId); _vsRafId = 0; }
 }
 
-function _vsSuspendRendering() {
-  _vsSuspended = true;
-  _vsCancelRender();
-}
-
+function _vsSuspendRendering() { _vsSuspended = true; _vsCancelRender(); }
 function _vsResumeRendering() {
   _vsSuspended = false;
-  _vsLastFirst = -1;
-  _vsLastLast  = -1;
+  _vsLastFirst = -1; _vsLastLast = -1;
   _vsScheduleRender();
 }
 
@@ -204,9 +277,14 @@ async function _renderSidePanelCode(code, lang) {
   const savedLeft   = body.scrollLeft;
   const wasAtBottom = (body.scrollHeight - body.scrollTop - body.clientHeight) < 20;
 
+  // Set container height immediately for correct scrollbar
   const rawLineCount = (code.match(/\n/g) || []).length + 1;
+  _vsTotalH = VS_PAD + rawLineCount * VS_ROW_H + VS_PAD;
   const wrap = document.getElementById('spCodeWrap');
-  if (wrap) wrap.style.height = (VS_PAD + rawLineCount * VS_ROW_H + VS_PAD).toFixed(1) + 'px';
+  if (wrap) wrap.style.height = _vsTotalH.toFixed(1) + 'px';
+
+  // Reset render state so table rebuilds from scratch
+  _vsLastFirst = -1; _vsLastLast = -1;
 
   let lines;
   try {
@@ -216,13 +294,15 @@ async function _renderSidePanelCode(code, lang) {
     lines = _syncHighlightAndSplit(code, lang);
   }
 
-  if (hash !== _vsHash) return;
+  if (hash !== _vsHash) return; // superseded
 
-  _vsLines     = lines;
-  _vsLastFirst = -1;
-  _vsLastLast  = -1;
+  _vsLines = lines;
+  _vsTotalH = VS_PAD + lines.length * VS_ROW_H + VS_PAD;
+  if (wrap) wrap.style.height = _vsTotalH.toFixed(1) + 'px';
 
-  if (wrap) wrap.style.height = (VS_PAD + lines.length * VS_ROW_H + VS_PAD).toFixed(1) + 'px';
+  // Reset table
+  if (_vsTbody) _vsTbody.innerHTML = '';
+  _vsLastFirst = -1; _vsLastLast = -1;
 
   _vsRenderWindow();
 
@@ -260,9 +340,8 @@ function openSidePanel(code, lang, filename, streamInfo) {
   langEl.textContent = spLang.toUpperCase();
   const colour = _langBadgeColours[spLang.toLowerCase()];
   if (colour) {
-    langEl.style.color = colour;
-    langEl.style.background = colour + '1a';
-    langEl.style.border = '1px solid ' + colour + '48';
+    langEl.style.color = colour; langEl.style.background = colour+'1a';
+    langEl.style.border = '1px solid '+colour+'48';
   } else { langEl.style.color = langEl.style.background = langEl.style.border = ''; }
 
   const cpBtn = document.getElementById('spCopyBtn');
@@ -273,6 +352,7 @@ function openSidePanel(code, lang, filename, streamInfo) {
   _getWorker();
 
   _vsHash = '';
+  _vsTable = null; _vsTbody = null; // force fresh table on open
   _renderSidePanelCode(code, spLang);
 
   const panel = document.getElementById('sidePanel');
@@ -316,6 +396,7 @@ function closeSidePanel() {
   _liveSidePanelInfo = null;
   _vsLines = []; _vsHash = ''; _vsLastFirst = -1; _vsLastLast = -1;
   _vsSuspended = false; _vsCancelRender();
+  _vsTable = null; _vsTbody = null;
   if (_liveUpdateTimer) { clearTimeout(_liveUpdateTimer); _liveUpdateTimer = null; }
 }
 
@@ -329,10 +410,12 @@ function copySidePanel() {
 function downloadSidePanel() { downloadCode(spCode, spLang, spFilename); }
 function toggleSidePanelWrap() {
   _wrapOn = !_wrapOn; _applyWrapState();
-  _vsLastFirst = -1; _vsLastLast = -1; _vsScheduleRender();
+  if (_vsTbody) _vsTbody.innerHTML = '';
+  _vsLastFirst = -1; _vsLastLast = -1;
+  _vsScheduleRender();
 }
 
-// ─── Resize — hide content during drag, zero reflow ─────────────────────────
+// ─── Resize: hide content during drag ─────────────────────────────────────
 function _initSidePanelResize() {
   const panel  = document.getElementById('sidePanel');
   const handle = document.getElementById('spResizeHandle');
@@ -342,35 +425,23 @@ function _initSidePanelResize() {
   const MIN_W = 280;
   const maxW  = () => Math.min(Math.floor(window.innerWidth * 0.75), window.innerWidth - 400);
   const isMob = () => window.innerWidth <= 768;
-
-  // Overlay div placed over panel content during drag — prevents all layout hits
-  let _dragOverlay = null;
+  let _overlay = null;
 
   function _startDrag(clientX) {
-    startX = clientX;
-    startW = panel.offsetWidth;
-    dragging = true;
-
+    startX = clientX; startW = panel.offsetWidth; dragging = true;
     panel.classList.add('no-transition');
-    document.body.style.cursor     = 'col-resize';
-    document.body.style.userSelect = 'none';
-
-    // Suspend virtual render
+    document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none';
     _vsSuspendRendering();
 
-    // Create transparent overlay that covers the panel body
-    // This prevents any mouse events reaching content (stops hover reflows)
-    // and also prevents the browser from repainting text during drag
-    if (!_dragOverlay) {
-      _dragOverlay = document.createElement('div');
-      _dragOverlay.style.cssText =
-        'position:absolute;inset:0;z-index:999;cursor:col-resize;background:transparent;';
+    // Transparent overlay prevents mouse events reaching content
+    if (!_overlay) {
+      _overlay = document.createElement('div');
+      _overlay.style.cssText = 'position:absolute;inset:0;z-index:9999;cursor:col-resize;';
     }
     const body = document.getElementById('sidePanelBody');
-    if (body) body.appendChild(_dragOverlay);
+    if (body) body.appendChild(_overlay);
 
-    // Hide the code content — the container still occupies space,
-    // so no reflow, but the browser skips all text rendering work
+    // Hide code content — browser skips text rendering
     const wrap = document.getElementById('spCodeWrap');
     if (wrap) wrap.style.visibility = 'hidden';
   }
@@ -381,55 +452,29 @@ function _initSidePanelResize() {
   }
 
   function _endDrag() {
-    if (!dragging) return;
-    dragging = false;
-
+    if (!dragging) return; dragging = false;
     panel.classList.remove('no-transition');
-    document.body.style.cursor     = '';
-    document.body.style.userSelect = '';
-
-    // Remove overlay
-    if (_dragOverlay?.parentNode) _dragOverlay.parentNode.removeChild(_dragOverlay);
-
-    // Show content again, force re-render for new width
+    document.body.style.cursor = ''; document.body.style.userSelect = '';
+    if (_overlay?.parentNode) _overlay.parentNode.removeChild(_overlay);
     const wrap = document.getElementById('spCodeWrap');
     if (wrap) wrap.style.visibility = '';
-
+    // Force fresh render for new width
+    if (_vsTbody) _vsTbody.innerHTML = '';
+    _vsLastFirst = -1; _vsLastLast = -1;
     _vsResumeRendering();
   }
 
   handle.addEventListener('mousedown', e => {
-    if (isMob()) return;
-    e.preventDefault();
-    handle.classList.add('dragging');
-    _startDrag(e.clientX);
+    if (isMob()) return; e.preventDefault();
+    handle.classList.add('dragging'); _startDrag(e.clientX);
   });
+  document.addEventListener('mousemove', e => _doDrag(e.clientX));
+  document.addEventListener('mouseup', () => { if (!dragging) return; handle.classList.remove('dragging'); _endDrag(); });
+  handle.addEventListener('touchstart', e => { if (isMob()) return; _startDrag(e.touches[0].clientX); }, { passive:true });
+  document.addEventListener('touchmove', e => { if (!dragging) return; _doDrag(e.touches[0].clientX); }, { passive:true });
+  document.addEventListener('touchend', () => { if (!dragging) return; _endDrag(); });
 
-  document.addEventListener('mousemove', e => { _doDrag(e.clientX); });
-
-  document.addEventListener('mouseup', () => {
-    if (!dragging) return;
-    handle.classList.remove('dragging');
-    _endDrag();
-  });
-
-  handle.addEventListener('touchstart', e => {
-    if (isMob()) return;
-    _startDrag(e.touches[0].clientX);
-  }, { passive: true });
-
-  document.addEventListener('touchmove', e => {
-    if (!dragging) return;
-    _doDrag(e.touches[0].clientX);
-  }, { passive: true });
-
-  document.addEventListener('touchend', () => {
-    if (!dragging) return;
-    _endDrag();
-  });
-
-  _applyWrapState();
-  _initVirtualScroll();
+  _applyWrapState(); _initVirtualScroll();
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _initSidePanelResize);

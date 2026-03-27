@@ -20,15 +20,12 @@ function recoverInterruptedStreams() {
 function init() {
   recoverInterruptedStreams();
 
-  // Populate model select immediately from fallback
   _populateModelSelect(FALLBACK_MODELS);
 
-  // Apply saved UI state
   applyThinkingState();
   applySidebarState();
   initScrollWatcher();
 
-  // Render chat list and load first conversation
   renderChatList();
   if (conversations.length > 0) loadConvo(conversations[0].id);
   else newChat();
@@ -37,11 +34,12 @@ function init() {
   initDragDrop();
   initPaste();
 
-  // Background fetch of live model list
   if (settings.apiKey) _loadModelsBackground();
-
   setTimeout(() => { if (!settings.apiKey) openSettings(); }, 300);
+
+  updateTokenDisplay(); // ← add here
 }
+
 
 function _populateModelSelect(models) {
   const sel = document.getElementById('modelSelect');
