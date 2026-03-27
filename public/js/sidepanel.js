@@ -9,17 +9,18 @@ const _langBadgeColours = {
   sql:'#a8d8a8',yaml:'#fbbf24',yml:'#fbbf24',xml:'#e8a87a',
 };
 
-const SP_WIDTH_KEY   = 'brc_sidepanel_width';
-const SP_SCROLL_KEY  = 'brc_sidepanel_scroll'; // per-file scroll positions
+const SP_WIDTH_KEY  = 'brc_sidepanel_width';
+const SP_SCROLL_KEY = 'brc_sidepanel_scroll';
 
 let _liveSidePanelInfo = null;
 let _wrapOn            = true;
-let _liveUpdateTimer   = null;
+let _liveRafId         = 0;
+let _livePendingCode   = null;
+let _livePendingLang   = null;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// WORKER — highlight + split entirely off main thread
+// WORKER
 // ═══════════════════════════════════════════════════════════════════════════
-
 const _WORKER_SRC = `
 importScripts('https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js');
 
@@ -124,7 +125,6 @@ function _processAsync(code, lang) {
 // ═══════════════════════════════════════════════════════════════════════════
 // VIRTUAL SCROLL
 // ═══════════════════════════════════════════════════════════════════════════
-
 const VS_ROW_H  = 21.45;
 const VS_PAD    = 16;
 const VS_BUFFER = 20;
@@ -135,20 +135,16 @@ let _vsLastFirst = -1;
 let _vsLastLast  = -1;
 let _vsRafId     = 0;
 let _vsSuspended = false;
-let _vsTotalH    = 0;
-
-let _vsTable  = null;
-let _vsTbody  = null;
+let _vsTable     = null;
+let _vsTbody     = null;
 
 function _vsEnsureTable() {
   const wrap = document.getElementById('spCodeWrap');
   if (!wrap) return false;
   if (_vsTable && wrap.contains(_vsTable)) return true;
-
   _vsTable = document.createElement('table');
   _vsTable.className = 'sp-code-table';
   _vsTable.style.cssText = 'position:absolute;left:0;right:0;top:0;margin:0;';
-
   _vsTbody = document.createElement('tbody');
   _vsTable.appendChild(_vsTbody);
   wrap.innerHTML = '';
@@ -161,6 +157,12 @@ function _fastHash(s) {
   const n = Math.min(s.length, 8000);
   for (let i = 0; i < n; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
   return h + '_' + s.length;
+}
+
+function _vsSetHeight(lineCount) {
+  const h = VS_PAD + lineCount * VS_ROW_H + VS_PAD;
+  const wrap = document.getElementById('spCodeWrap');
+  if (wrap) wrap.style.height = h.toFixed(1) + 'px';
 }
 
 function _vsRenderWindow() {
@@ -183,19 +185,13 @@ function _vsRenderWindow() {
   _vsLastFirst = first;
   _vsLastLast  = last;
 
-  const topOffset = VS_PAD + first * VS_ROW_H;
-  _vsTable.style.transform = `translateY(${topOffset.toFixed(1)}px)`;
+  _vsTable.style.transform = `translateY(${(VS_PAD + first * VS_ROW_H).toFixed(1)}px)`;
 
   const newCount  = last - first + 1;
   const prevCount = prevFirst === -1 ? 0 : prevLast - prevFirst + 1;
   const rows      = _vsTbody.rows;
 
-  if (
-    prevFirst === -1 ||
-    first > prevLast + 1 ||
-    last  < prevFirst - 1 ||
-    newCount !== prevCount
-  ) {
+  if (prevFirst === -1 || first > prevLast + 1 || last < prevFirst - 1 || newCount !== prevCount) {
     let html = '';
     for (let i = first; i <= last; i++) {
       html += `<tr class="sp-line"><td class="sp-line-num">${i+1}</td><td class="sp-line-code">${_vsLines[i]||'\u200B'}</td></tr>`;
@@ -205,38 +201,27 @@ function _vsRenderWindow() {
     if (first < prevFirst) {
       const frag = document.createDocumentFragment();
       for (let i = first; i < prevFirst; i++) {
-        const tr = document.createElement('tr');
-        tr.className = 'sp-line';
+        const tr = document.createElement('tr'); tr.className = 'sp-line';
         tr.innerHTML = `<td class="sp-line-num">${i+1}</td><td class="sp-line-code">${_vsLines[i]||'\u200B'}</td>`;
         frag.appendChild(tr);
       }
       _vsTbody.insertBefore(frag, rows[0]);
     }
-
     if (last > prevLast) {
       const frag = document.createDocumentFragment();
       for (let i = prevLast + 1; i <= last; i++) {
-        const tr = document.createElement('tr');
-        tr.className = 'sp-line';
+        const tr = document.createElement('tr'); tr.className = 'sp-line';
         tr.innerHTML = `<td class="sp-line-num">${i+1}</td><td class="sp-line-code">${_vsLines[i]||'\u200B'}</td>`;
         frag.appendChild(tr);
       }
       _vsTbody.appendChild(frag);
     }
-
     const removeTop = first - prevFirst;
-    if (removeTop > 0) {
-      for (let i = 0; i < removeTop && rows.length > 0; i++) {
-        _vsTbody.removeChild(rows[0]);
-      }
-    }
-
+    if (removeTop > 0)
+      for (let i = 0; i < removeTop && rows.length > 0; i++) _vsTbody.removeChild(rows[0]);
     const removeBottom = prevLast - last;
-    if (removeBottom > 0) {
-      for (let i = 0; i < removeBottom && rows.length > 0; i++) {
-        _vsTbody.removeChild(rows[rows.length - 1]);
-      }
-    }
+    if (removeBottom > 0)
+      for (let i = 0; i < removeBottom && rows.length > 0; i++) _vsTbody.removeChild(rows[rows.length-1]);
   }
 }
 
@@ -244,11 +229,9 @@ function _vsScheduleRender() {
   if (_vsRafId || _vsSuspended) return;
   _vsRafId = requestAnimationFrame(() => { _vsRafId = 0; _vsRenderWindow(); });
 }
-
 function _vsCancelRender() {
   if (_vsRafId) { cancelAnimationFrame(_vsRafId); _vsRafId = 0; }
 }
-
 function _vsSuspendRendering() { _vsSuspended = true; _vsCancelRender(); }
 function _vsResumeRendering() {
   _vsSuspended = false;
@@ -256,52 +239,114 @@ function _vsResumeRendering() {
   _vsScheduleRender();
 }
 
-// ─── Scroll position memory (per file by hash) ───────────────────────────
-function _saveScrollPos(hash, top) {
-  try {
-    const map = JSON.parse(sessionStorage.getItem(SP_SCROLL_KEY) || '{}');
-    map[hash] = top;
-    // keep at most 50 entries
-    const keys = Object.keys(map);
-    if (keys.length > 50) delete map[keys[0]];
-    sessionStorage.setItem(SP_SCROLL_KEY, JSON.stringify(map));
-  } catch(e) {}
+// ─── Escape helper for plain-text streaming lines ─────────────────────────
+const _esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+// ═══════════════════════════════════════════════════════════════════════════
+// STREAMING — plain-text fast path + background highlight
+//
+// Root cause of blank space bug:
+//   Old code called _vsRenderWindow() BEFORE scrolling to bottom, so the
+//   render window was calculated at scrollTop=0 (top of file). Then it
+//   scrolled to bottom but never re-rendered → rows at wrong position.
+//
+//   Fix: always rebuild _vsLines from raw text (pure string split, no worker),
+//   set height, then in a RAF (after layout flushes): scroll → render.
+//   This guarantees render sees the correct scrollTop.
+//
+// Also fixed: prevCount drift — old code used _vsLines.length as prevCount
+//   but background highlight produces different line counts than raw splits,
+//   causing misalignment. New code always rebuilds from scratch each tick.
+// ═══════════════════════════════════════════════════════════════════════════
+let _bgHighlightTimer = null;
+let _bgHighlightCode  = '';
+let _bgHighlightLang  = '';
+let _bgHighlightHash  = '';
+
+function _streamAppend(newCode, lang) {
+  const body = document.getElementById('sidePanelBody');
+  if (!body) return;
+
+  const newHash = _fastHash(newCode) + (lang || '');
+  _vsHash = newHash;
+
+  // Step 1: Rebuild ALL lines as escaped plain text (fast — no worker)
+  // This avoids any drift between _vsLines.length and real line count.
+  const allRaw = newCode.split('\n');
+  if (allRaw[allRaw.length - 1] === '') allRaw.pop();
+  _vsLines = allRaw.map(_esc);
+
+  // Step 2: Update container height immediately so scrollHeight is correct
+  _vsSetHeight(_vsLines.length);
+
+  // Step 3: In RAF — after browser has flushed the height layout change —
+  // scroll to bottom THEN render the window at the new scrollTop.
+  // Doing it in the same sync tick means scrollHeight is stale and
+  // _vsRenderWindow calculates wrong rows (the blank space bug).
+  requestAnimationFrame(() => {
+    if (_vsHash !== newHash) return; // superseded by newer content
+    // Now scrollHeight reflects the updated spCodeWrap height
+    body.scrollTop = body.scrollHeight;
+    // Force full rebuild since scroll position changed
+    _vsLastFirst = -1; _vsLastLast = -1;
+    _vsRenderWindow();
+  });
+
+  // Step 4: Debounced background highlight (250ms after last append)
+  _bgHighlightCode = newCode;
+  _bgHighlightLang = lang;
+  _bgHighlightHash = newHash;
+  clearTimeout(_bgHighlightTimer);
+  _bgHighlightTimer = setTimeout(_runBackgroundHighlight, 250);
 }
 
-function _loadScrollPos(hash) {
+async function _runBackgroundHighlight() {
+  const code = _bgHighlightCode;
+  const lang = _bgHighlightLang;
+  const hash = _bgHighlightHash;
+  if (!code) return;
+
+  let lines;
   try {
-    const map = JSON.parse(sessionStorage.getItem(SP_SCROLL_KEY) || '{}');
-    return map[hash] != null ? map[hash] : null;
-  } catch(e) { return null; }
+    lines = await _processAsync(code, lang);
+  } catch(e) {
+    return; // stale or worker error — plain text stays
+  }
+
+  if (hash !== _vsHash) return; // superseded
+
+  const body    = document.getElementById('sidePanelBody');
+  const atBot   = body ? (body.scrollHeight - body.scrollTop - body.clientHeight) < 40 : false;
+  const savedTop = body ? body.scrollTop : 0;
+
+  _vsLines = lines;
+  _vsSetHeight(lines.length);
+  if (_vsTbody) _vsTbody.innerHTML = '';
+  _vsLastFirst = -1; _vsLastLast = -1;
+  _vsRenderWindow();
+
+  if (body) {
+    body.scrollTop = atBot ? body.scrollHeight : savedTop;
+  }
 }
 
-// ─── Core render ─────────────────────────────────────────────────────────
-// scrollBehavior: 'top' | 'bottom' | 'preserve' | 'remember'
-//   top      — scroll to line 1 (new file open, not streaming)
-//   bottom   — scroll to last line (streaming / live append)
-//   preserve — keep current scroll position (live update tick)
-//   remember — restore last saved position for this hash, or top
-async function _renderSidePanelCode(code, lang, scrollBehavior = 'preserve') {
+// ═══════════════════════════════════════════════════════════════════════════
+// FULL RENDER (async, for static / non-streaming files)
+// ═══════════════════════════════════════════════════════════════════════════
+async function _renderSidePanelCode(code, lang, scrollBehavior) {
   const body = document.getElementById('sidePanelBody');
   if (!body) return;
 
   const hash = _fastHash(code) + (lang || '');
-  const sameContent = hash === _vsHash;
-
-  // For preserve/remember with same content, skip everything
-  if (sameContent && scrollBehavior === 'preserve') return;
-
+  if (hash === _vsHash && scrollBehavior === 'preserve') return;
   _vsHash = hash;
 
-  const savedTop    = body.scrollTop;
-  const savedLeft   = body.scrollLeft;
-  const atBottom    = (body.scrollHeight - body.scrollTop - body.clientHeight) < 20;
+  const savedTop  = body.scrollTop;
+  const savedLeft = body.scrollLeft;
+  const atBottom  = (body.scrollHeight - body.scrollTop - body.clientHeight) < 20;
 
-  const rawLineCount = (code.match(/\n/g) || []).length + 1;
-  _vsTotalH = VS_PAD + rawLineCount * VS_ROW_H + VS_PAD;
-  const wrap = document.getElementById('spCodeWrap');
-  if (wrap) wrap.style.height = _vsTotalH.toFixed(1) + 'px';
-
+  const rawLines = (code.match(/\n/g) || []).length + 1;
+  _vsSetHeight(rawLines);
   _vsLastFirst = -1; _vsLastLast = -1;
 
   let lines;
@@ -312,48 +357,69 @@ async function _renderSidePanelCode(code, lang, scrollBehavior = 'preserve') {
     lines = _syncHighlightAndSplit(code, lang);
   }
 
-  if (hash !== _vsHash) return; // superseded
+  if (hash !== _vsHash) return;
 
   _vsLines = lines;
-  _vsTotalH = VS_PAD + lines.length * VS_ROW_H + VS_PAD;
-  if (wrap) wrap.style.height = _vsTotalH.toFixed(1) + 'px';
-
+  _vsSetHeight(lines.length);
   if (_vsTbody) _vsTbody.innerHTML = '';
   _vsLastFirst = -1; _vsLastLast = -1;
 
-  // Apply scroll before render so the render window is correct
   if (scrollBehavior === 'top') {
-    body.scrollTop = 0;
-    body.scrollLeft = 0;
+    body.scrollTop = 0; body.scrollLeft = 0;
   } else if (scrollBehavior === 'bottom') {
     body.scrollTop = body.scrollHeight;
   } else if (scrollBehavior === 'remember') {
-    const remembered = _loadScrollPos(hash);
-    body.scrollTop  = remembered != null ? remembered : 0;
+    const saved = _loadScrollPos(hash);
+    body.scrollTop  = saved != null ? saved : 0;
     body.scrollLeft = 0;
   } else {
-    // preserve
-    if (atBottom) {
-      body.scrollTop = body.scrollHeight;
-    } else {
-      body.scrollTop  = savedTop;
-      body.scrollLeft = savedLeft;
-    }
+    body.scrollTop  = atBottom ? body.scrollHeight : savedTop;
+    body.scrollLeft = savedLeft;
   }
 
   _vsRenderWindow();
 
-  // After render, correct scroll (scrollHeight may have changed)
   requestAnimationFrame(() => {
-    if (scrollBehavior === 'bottom') {
-      body.scrollTop = body.scrollHeight;
-    } else if (scrollBehavior === 'preserve' && atBottom) {
+    if (scrollBehavior === 'bottom' || (scrollBehavior === 'preserve' && atBottom)) {
       body.scrollTop = body.scrollHeight;
     }
     _vsScheduleRender();
   });
 }
 
+// ─── Scroll position memory ────────────────────────────────────────────────
+function _saveScrollPos(hash, top) {
+  try {
+    const map = JSON.parse(sessionStorage.getItem(SP_SCROLL_KEY) || '{}');
+    map[hash] = top;
+    const keys = Object.keys(map);
+    if (keys.length > 50) delete map[keys[0]];
+    sessionStorage.setItem(SP_SCROLL_KEY, JSON.stringify(map));
+  } catch(e) {}
+}
+function _loadScrollPos(hash) {
+  try {
+    const map = JSON.parse(sessionStorage.getItem(SP_SCROLL_KEY) || '{}');
+    return map[hash] != null ? map[hash] : null;
+  } catch(e) { return null; }
+}
+
+// ─── Panel width persistence ───────────────────────────────────────────────
+function _savePanelWidth(w) {
+  try { localStorage.setItem(SP_WIDTH_KEY, String(Math.round(w))); } catch(e) {}
+}
+function _loadPanelWidth() {
+  try { return parseInt(localStorage.getItem(SP_WIDTH_KEY) || '0') || 0; } catch(e) { return 0; }
+}
+function _applyPanelWidth(panel) {
+  if (window.innerWidth <= 768) return;
+  const saved = _loadPanelWidth();
+  if (!saved) return;
+  const MAX_W = Math.min(Math.floor(window.innerWidth * 0.75), window.innerWidth - 400);
+  panel.style.width = Math.max(280, Math.min(MAX_W, saved)) + 'px';
+}
+
+// ─── Wrap state ────────────────────────────────────────────────────────────
 function _applyWrapState() {
   const body = document.getElementById('sidePanelBody');
   const btn  = document.getElementById('spWrapBtn');
@@ -363,9 +429,9 @@ function _applyWrapState() {
   btn.textContent = _wrapOn ? '↵ Wrap: on' : '↵ Wrap';
 }
 
-// ─── Scroll watcher — save position on scroll ────────────────────────────
+// ─── Scroll watcher ────────────────────────────────────────────────────────
 let _scrollSaveTimer = null;
-let _vsScrollBound = false;
+let _vsScrollBound   = false;
 
 function _initVirtualScroll() {
   if (_vsScrollBound) return;
@@ -374,36 +440,16 @@ function _initVirtualScroll() {
   if (!body) return;
   body.addEventListener('scroll', () => {
     _vsScheduleRender();
-    // Debounced save of scroll position
     if (_vsHash) {
       clearTimeout(_scrollSaveTimer);
-      _scrollSaveTimer = setTimeout(() => {
-        _saveScrollPos(_vsHash, body.scrollTop);
-      }, 300);
+      _scrollSaveTimer = setTimeout(() => _saveScrollPos(_vsHash, body.scrollTop), 300);
     }
   }, { passive: true });
 }
 
-// ─── Panel width persistence ──────────────────────────────────────────────
-function _savePanelWidth(w) {
-  try { localStorage.setItem(SP_WIDTH_KEY, String(w)); } catch(e) {}
-}
-
-function _loadPanelWidth() {
-  try { return parseInt(localStorage.getItem(SP_WIDTH_KEY) || '0') || 0; } catch(e) { return 0; }
-}
-
-function _applyPanelWidth(panel) {
-  const saved = _loadPanelWidth();
-  const isMob = () => window.innerWidth <= 768;
-  if (saved > 0 && !isMob()) {
-    const MAX_W = Math.min(Math.floor(window.innerWidth * 0.75), window.innerWidth - 400);
-    const MIN_W = 280;
-    panel.style.width = Math.max(MIN_W, Math.min(MAX_W, saved)) + 'px';
-  }
-}
-
-// ─── openSidePanel ────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// PUBLIC API
+// ═══════════════════════════════════════════════════════════════════════════
 function openSidePanel(code, lang, filename, streamInfo) {
   _liveSidePanelInfo = streamInfo || null;
   spCode = code; spLang = lang || 'text'; spFilename = filename || langToFilename(lang);
@@ -425,26 +471,28 @@ function openSidePanel(code, lang, filename, streamInfo) {
   _initVirtualScroll();
   _getWorker();
 
-  // Reset virtual scroll state so table rebuilds fresh
-  _vsHash = '';
+  // Cancel all in-flight work
+  if (_liveRafId) { cancelAnimationFrame(_liveRafId); _liveRafId = 0; }
+  _livePendingCode = null; _livePendingLang = null;
+  clearTimeout(_bgHighlightTimer); _bgHighlightTimer = null;
+  _bgHighlightCode = ''; _bgHighlightLang = ''; _bgHighlightHash = '';
+
+  // Reset virtual scroll
+  _vsHash = ''; _vsLines = [];
   _vsTable = null; _vsTbody = null;
   _vsLastFirst = -1; _vsLastLast = -1;
 
   const panel = document.getElementById('sidePanel');
-  const wasOpen = panel.classList.contains('open');
-
-  // Restore saved width before making panel visible
-  if (!wasOpen) {
-    panel.style.width = '';
-    _applyPanelWidth(panel);
-  }
+  // Clear inline width first so CSS default is clean, then restore saved
+  panel.style.width = '';
+  _applyPanelWidth(panel);
   panel.classList.add('open');
 
-  // Scroll behaviour:
-  //   streaming → bottom (follow live output)
-  //   otherwise → restore remembered position, or top
-  const scrollBehavior = streamInfo ? 'bottom' : 'remember';
-  _renderSidePanelCode(code, spLang, scrollBehavior);
+  if (streamInfo) {
+    _streamAppend(code, spLang);
+  } else {
+    _renderSidePanelCode(code, spLang, 'remember');
+  }
 }
 
 function updateLiveSidePanel(container, msgId) {
@@ -452,39 +500,60 @@ function updateLiveSidePanel(container, msgId) {
   if (!document.getElementById('sidePanel').classList.contains('open')) {
     _liveSidePanelInfo = null; return;
   }
-  if (_liveUpdateTimer) return;
-  _liveUpdateTimer = setTimeout(() => {
-    _liveUpdateTimer = null; _doLiveUpdate(container, msgId);
-  }, 500);
-}
 
-function _doLiveUpdate(container, msgId) {
-  if (!_liveSidePanelInfo || _liveSidePanelInfo.msgId !== msgId) return;
   const wrap = container.querySelector(`.stream-wrap[data-blockidx="${_liveSidePanelInfo.blockIdx}"]`);
   if (!wrap) return;
   const ce = wrap.querySelector('pre code'); if (!ce) return;
   const nc = ce.textContent, nl = wrap.dataset.lang || 'text';
-  if (nc !== spCode) {
-    spCode = nc; spLang = nl;
-    // During live streaming, follow bottom only if already near bottom
-    _renderSidePanelCode(nc, nl, 'preserve');
-  }
+  if (nc === spCode) return;
+
+  // Coalesce rapid updates into one RAF tick
+  _livePendingCode = nc;
+  _livePendingLang = nl;
+
+  if (_liveRafId) return;
+  _liveRafId = requestAnimationFrame(() => {
+    _liveRafId = 0;
+    if (!_livePendingCode) return;
+    const code = _livePendingCode, lang = _livePendingLang;
+    _livePendingCode = null; _livePendingLang = null;
+    spCode = code; spLang = lang;
+    _streamAppend(code, lang);
+  });
 }
 
 function clearLiveSidePanelFor(msgId) {
-  if (_liveSidePanelInfo?.msgId === msgId) _liveSidePanelInfo = null;
-  if (_liveUpdateTimer) { clearTimeout(_liveUpdateTimer); _liveUpdateTimer = null; }
+  if (_liveSidePanelInfo?.msgId === msgId) {
+    _liveSidePanelInfo = null;
+    // Final full highlight now that streaming is done
+    if (spCode && document.getElementById('sidePanel').classList.contains('open')) {
+      clearTimeout(_bgHighlightTimer);
+      _bgHighlightCode = spCode;
+      _bgHighlightLang = spLang;
+      _bgHighlightHash = _vsHash;
+      _runBackgroundHighlight();
+    }
+  }
+  if (_liveRafId) { cancelAnimationFrame(_liveRafId); _liveRafId = 0; }
+  _livePendingCode = null; _livePendingLang = null;
 }
 
 function closeSidePanel() {
   const panel = document.getElementById('sidePanel');
   panel.classList.remove('open');
-  // Do NOT reset panel width on close — persist it
+  // Clear inline width so CSS width:0 takes effect (fixes empty space)
+  panel.style.width = '';
+
   _liveSidePanelInfo = null;
-  _vsLines = []; _vsHash = ''; _vsLastFirst = -1; _vsLastLast = -1;
+  if (_liveRafId) { cancelAnimationFrame(_liveRafId); _liveRafId = 0; }
+  _livePendingCode = null; _livePendingLang = null;
+  clearTimeout(_bgHighlightTimer); _bgHighlightTimer = null;
+  _bgHighlightCode = ''; _bgHighlightLang = ''; _bgHighlightHash = '';
+
+  _vsLines = []; _vsHash = '';
+  _vsLastFirst = -1; _vsLastLast = -1;
   _vsSuspended = false; _vsCancelRender();
   _vsTable = null; _vsTbody = null;
-  if (_liveUpdateTimer) { clearTimeout(_liveUpdateTimer); _liveUpdateTimer = null; }
 }
 
 function copySidePanel() {
@@ -502,17 +571,16 @@ function toggleSidePanelWrap() {
   _vsScheduleRender();
 }
 
-// ─── Resize: smooth, RAF-throttled, content stays visible ────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// RESIZE — RAF-throttled, no pointer-event blocking
+// ═══════════════════════════════════════════════════════════════════════════
 function _initSidePanelResize() {
   const panel  = document.getElementById('sidePanel');
   const handle = document.getElementById('spResizeHandle');
   if (!handle || !panel) return;
 
-  let startX       = 0;
-  let startW       = 0;
-  let dragging     = false;
-  let _rafDragId   = 0;
-  let _pendingX    = 0;
+  let startX   = 0, startW = 0, dragging = false;
+  let _rafId   = 0, _pendingX = 0;
 
   const MIN_W = 280;
   const maxW  = () => Math.min(Math.floor(window.innerWidth * 0.75), window.innerWidth - 400);
@@ -522,67 +590,53 @@ function _initSidePanelResize() {
     startX = clientX; startW = panel.offsetWidth; dragging = true;
     handle.classList.add('dragging');
     panel.classList.add('no-transition');
-    document.body.style.cursor      = 'col-resize';
-    document.body.style.userSelect  = 'none';
-    // Suspend virtual scroll updates during drag (keeps content visible, stops JS churn)
+    document.body.style.cursor     = 'col-resize';
+    document.body.style.userSelect = 'none';
     _vsSuspendRendering();
-    // Prevent iframe / embedded content from stealing mouse
-    panel.style.pointerEvents = 'none';
+    // No pointerEvents change — allows ✕ button to remain clickable
   }
 
-  function _applyDragWidth() {
-    _rafDragId = 0;
+  function _commitWidth() {
+    _rafId = 0;
     if (!dragging) return;
-    const newW = Math.max(MIN_W, Math.min(maxW(), startW + (startX - _pendingX)));
-    panel.style.width = newW + 'px';
+    panel.style.width = Math.max(MIN_W, Math.min(maxW(), startW + (startX - _pendingX))) + 'px';
   }
 
   function _doDrag(clientX) {
     if (!dragging) return;
     _pendingX = clientX;
-    if (_rafDragId) return; // already scheduled for this frame
-    _rafDragId = requestAnimationFrame(_applyDragWidth);
+    if (_rafId) return;
+    _rafId = requestAnimationFrame(_commitWidth);
   }
 
   function _endDrag() {
     if (!dragging) return;
     dragging = false;
-    if (_rafDragId) { cancelAnimationFrame(_rafDragId); _rafDragId = 0; }
-
+    if (_rafId) { cancelAnimationFrame(_rafId); _rafId = 0; }
     handle.classList.remove('dragging');
     panel.classList.remove('no-transition');
     document.body.style.cursor     = '';
     document.body.style.userSelect = '';
-    panel.style.pointerEvents      = '';
-
-    // Save the new width
     _savePanelWidth(panel.offsetWidth);
-
-    // Resume virtual scroll with a fresh render for the new width
     if (_vsTbody) _vsTbody.innerHTML = '';
     _vsLastFirst = -1; _vsLastLast = -1;
     _vsResumeRendering();
   }
 
-  // Mouse events
   handle.addEventListener('mousedown', e => {
-    if (isMob()) return;
-    e.preventDefault();
-    _startDrag(e.clientX);
+    if (isMob()) return; e.preventDefault(); _startDrag(e.clientX);
   });
-  document.addEventListener('mousemove', e => { if (dragging) _doDrag(e.clientX); });
-  document.addEventListener('mouseup',   ()  => { if (dragging) _endDrag(); });
+  // window listeners so releasing outside browser still ends drag
+  window.addEventListener('mousemove', e => { if (dragging) _doDrag(e.clientX); });
+  window.addEventListener('mouseup',   ()  => { if (dragging) _endDrag(); });
 
-  // Touch events
   handle.addEventListener('touchstart', e => {
-    if (isMob()) return;
-    _startDrag(e.touches[0].clientX);
+    if (isMob()) return; _startDrag(e.touches[0].clientX);
   }, { passive: true });
-  document.addEventListener('touchmove', e => {
-    if (!dragging) return;
-    _doDrag(e.touches[0].clientX);
+  window.addEventListener('touchmove', e => {
+    if (!dragging) return; _doDrag(e.touches[0].clientX);
   }, { passive: true });
-  document.addEventListener('touchend', () => { if (dragging) _endDrag(); });
+  window.addEventListener('touchend', () => { if (dragging) _endDrag(); });
 
   _applyWrapState();
   _initVirtualScroll();
