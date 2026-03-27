@@ -1,0 +1,39 @@
+/* ─── INPUT AREA ──────────────────────────────────────────────────────────── */
+.input-area { flex-shrink: 0; padding: 10px 16px 14px; background: var(--bg1); border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; align-items: center; padding-bottom: max(14px, var(--sab)); }
+
+.input-box { width: 100%; max-width: 760px; background: var(--bg2); border: 1px solid var(--border2); border-radius: var(--radius); overflow: hidden; transition: border-color 0.2s, box-shadow 0.2s; }
+.input-box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
+.input-box.drag-over { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(110,198,200,0.15); }
+
+.file-preview-bar { padding: 8px 12px 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.file-preview-bar:empty { display: none; }
+.file-preview-chip { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 6px; background: var(--bg4); border: 1px solid var(--border2); font-size: 11px; font-family: var(--mono); color: var(--text1); }
+.file-preview-chip .fp-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 120px; }
+.file-preview-chip .fp-img { width: 24px; height: 24px; border-radius: 4px; object-fit: cover; }
+.remove-file { cursor: pointer; color: var(--text3); font-size: 14px; background: none; border: none; padding: 0; line-height: 1; transition: color 0.12s; min-width: 24px; min-height: 24px; display: flex; align-items: center; justify-content: center; }
+.remove-file:hover { color: var(--pink); }
+
+.input-row { display: flex; align-items: flex-end; gap: 6px; padding: 8px; }
+.input-action-btn { width: 36px; height: 36px; border-radius: var(--radius-sm); flex-shrink: 0; background: var(--bg3); border: 1px solid var(--border); cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--text2); transition: all 0.15s; }
+.input-action-btn:hover { background: var(--bg4); color: var(--text0); }
+
+#msgInput { flex: 1; background: none; border: none; outline: none; resize: none; color: var(--text0); font-family: var(--sans); font-size: 16px; line-height: 1.6; padding: 4px 0; min-height: 24px; max-height: 200px; }
+#msgInput::placeholder { color: var(--text3); }
+
+.send-btn { width: 36px; height: 36px; border-radius: var(--radius-sm); flex-shrink: 0; background: var(--accent); border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; color: #000; transition: all 0.15s; }
+.send-btn:hover:not(:disabled) { background: #e0b888; }
+.send-btn:disabled { background: var(--bg4); color: var(--text3); cursor: not-allowed; }
+
+.stop-btn { width: 36px; height: 36px; border-radius: var(--radius-sm); flex-shrink: 0; background: rgba(232,122,144,0.15); border: 1px solid rgba(232,122,144,0.3); cursor: pointer; align-items: center; justify-content: center; color: var(--pink); transition: all 0.15s; display: none; }
+.stop-btn:hover { background: rgba(232,122,144,0.25); }
+.stop-btn.visible { display: flex; }
+
+.input-hint { font-size: 10px; font-family: var(--mono); color: var(--text3); width: 100%; max-width: 760px; padding: 0 4px; }
+
+/* ─── DROP OVERLAY ────────────────────────────────────────────────────────── */
+.drop-overlay { position: fixed; inset: 0; z-index: 300; background: rgba(10,10,10,0.85); backdrop-filter: blur(6px); display: flex; align-items: center; justify-content: center; opacity: 0; pointer-events: none; transition: opacity 0.2s; }
+.drop-overlay.visible { opacity: 1; pointer-events: all; }
+.drop-zone { border: 2px dashed var(--cyan); border-radius: 20px; padding: 50px 70px; display: flex; flex-direction: column; align-items: center; gap: 14px; text-align: center; }
+.drop-zone svg { color: var(--cyan); opacity: 0.7; }
+.drop-title { font-size: 18px; font-weight: 700; }
+.drop-sub { font-size: 13px; color: var(--text2); }

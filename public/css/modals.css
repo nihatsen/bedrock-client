@@ -1,0 +1,42 @@
+/* ─── MODAL OVERLAY ───────────────────────────────────────────────────────── */
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 100; display: flex; align-items: center; justify-content: center; opacity: 0; pointer-events: none; transition: opacity 0.2s; backdrop-filter: blur(3px); padding: var(--sat) var(--sar) var(--sab) var(--sal); }
+.modal-overlay.open { opacity: 1; pointer-events: all; }
+
+#imgModal img { max-width: 90vw; max-height: 85vh; border-radius: 10px; object-fit: contain; box-shadow: var(--shadow); }
+
+.modal { background: var(--bg2); border: 1px solid var(--border2); border-radius: 16px; box-shadow: var(--shadow); transform: translateY(16px); transition: transform 0.25s; max-height: 90vh; max-width: 95vw; }
+.modal-overlay.open .modal { transform: none; }
+.settings-modal { width: 500px; overflow-y: auto; }
+
+.modal-header { display: flex; align-items: center; justify-content: space-between; padding: 18px 22px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg2); z-index: 1; border-radius: 16px 16px 0 0; }
+.modal-title { font-size: 15px; font-weight: 700; }
+.modal-close { width: 32px; height: 32px; border-radius: 6px; background: var(--bg4); border: 1px solid var(--border); cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--text2); font-size: 13px; transition: all 0.15s; }
+.modal-close:hover { color: var(--text0); }
+
+.modal-body { padding: 18px 22px; display: flex; flex-direction: column; gap: 14px; }
+
+/* ─── FORM ELEMENTS ───────────────────────────────────────────────────────── */
+.form-group { display: flex; flex-direction: column; gap: 5px; }
+.form-group label { font-size: 11px; font-family: var(--mono); color: var(--text2); letter-spacing: 0.04em; text-transform: uppercase; }
+.form-group label .hint { text-transform: none; letter-spacing: 0; }
+.form-input { background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 9px 11px; color: var(--text0); font-family: var(--mono); font-size: 14px; outline: none; transition: border-color 0.15s; width: 100%; }
+.form-input:focus { border-color: var(--accent); }
+.form-input::placeholder { color: var(--text3); }
+.form-textarea { min-height: 70px; resize: vertical; font-size: 14px; font-family: var(--sans); line-height: 1.5; }
+.form-row { display: flex; gap: 12px; }
+.form-row .form-group { flex: 1; }
+.range-row { display: flex; gap: 12px; align-items: center; }
+.range-row input[type=range] { flex: 1; -webkit-appearance: none; height: 3px; background: var(--border2); border-radius: 2px; outline: none; cursor: pointer; }
+.range-row input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; background: var(--accent); border-radius: 50%; }
+.range-row span { font-family: var(--mono); font-size: 11px; color: var(--accent); min-width: 32px; text-align: right; }
+
+.modal-footer { padding: 14px 22px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 8px; position: sticky; bottom: 0; background: var(--bg2); border-radius: 0 0 16px 16px; }
+
+.btn { padding: 8px 18px; border-radius: var(--radius-sm); font-family: var(--sans); font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s; min-height: 40px; }
+.btn-ghost { background: none; border: 1px solid var(--border2); color: var(--text1); }
+.btn-ghost:hover { border-color: var(--text2); color: var(--text0); }
+.btn-primary { background: var(--accent); border: none; color: #000; }
+.btn-primary:hover { background: #e0b888; }
+
+.form-input optgroup { background: var(--bg3); color: var(--text3); font-size: 10px; font-family: var(--mono); }
+.form-input optgroup option { color: var(--text0); font-size: 12px; padding: 4px 0; }

@@ -1,0 +1,81 @@
+/* ─── RESET ───────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* ─── ROOT VARIABLES ─────────────────────────────────────────────────────── */
+:root {
+  --bg0: #1a1a1a;
+  --bg1: #212121;
+  --bg2: #2a2a2a;
+  --bg3: #333333;
+  --bg4: #3d3d3d;
+  --bg5: #4a4a4a;
+  --border: #3a3a3a;
+  --border2: #4a4a4a;
+  --border3: #555;
+  --accent: #d4a574;
+  --accent-dim: #b8956a;
+  --accent-glow: rgba(212,165,116,0.15);
+  --accent-glow2: rgba(212,165,116,0.06);
+  --cyan: #6ec6c8;
+  --cyan-bg: #253636;
+  --pink: #e87a90;
+  --green: #7ec87e;
+  --blue: #7aabdf;
+  --purple: #a78bfa;
+  --orange: #e8a87a;
+  --text0: #ececec;
+  --text1: #b0b0b0;
+  --text2: #808080;
+  --text3: #555;
+  --think: #a78bfa;
+  --think-bg: rgba(167,139,250,0.08);
+  --think-border: rgba(167,139,250,0.25);
+  --shadow: 0 8px 32px rgba(0,0,0,0.5);
+  --mono: 'JetBrains Mono', 'Consolas', monospace;
+  --sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --code-bg: #282c34;
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+  --sp-gutter-w: 44px;
+}
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg0);
+  color: var(--text0);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ─── PERFORMANCE CONTAINMENT ─────────────────────────────────────────────── */
+.messages         { contain: strict; will-change: scroll-position; }
+.msg-row          { contain: layout style; }
+.side-panel-body  { contain: strict; will-change: scroll-position; }
+#spCodeWrap       { contain: size layout; }
+.stream-wrap      { contain: layout style; }
+.chat-list        { contain: strict; will-change: scroll-position; }
+.topbar           { contain: layout style size; }
+.sidebar          { contain: layout style; }
+.input-area       { contain: layout style; }
+
+/* ─── SCROLLBAR ───────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+#scrollBtn { display: none !important; }
+
+/* ─── ANIMATIONS ──────────────────────────────────────────────────────────── */
+@keyframes blink   { 50% { opacity: 0; } }
+@keyframes spin    { to { transform: rotate(360deg); } }
+@keyframes pulse   { 0%,80%,100% { transform:scale(0.5);opacity:0.3; } 40% { transform:scale(1);opacity:1; } }
+@keyframes msgIn   { from { opacity:0;transform:translateY(8px); } to { opacity:1;transform:none; } }
+@keyframes fadeIn  { from { opacity:0; } to { opacity:1; } }
