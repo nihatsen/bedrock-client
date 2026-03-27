@@ -986,6 +986,19 @@ html, body {
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+/* ─── Settings region select — optgroup styling ──────────────────────────── */
+.form-input optgroup {
+  background: var(--bg3);
+  color: var(--text3);
+  font-size: 10px;
+  font-family: var(--mono);
+  letter-spacing: 0.06em;
+}
+.form-input optgroup option {
+  color: var(--text0);
+  font-size: 12px;
+  padding: 4px 0;
+}
 
 /* ─── RESPONSIVE ──────────────────────────────────────────────────────────── */
 @media (max-width: 768px) {
@@ -997,3 +1010,4 @@ html, body {
 }
 
 #scrollBtn { display: none !important; }
+

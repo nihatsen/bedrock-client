@@ -21,7 +21,9 @@ let spCode = '', spLang = 'text', spFilename = 'code.txt';
 const streamRegistry = new Map();
 
 // FIX: Changed from a fabricated model ID to one that actually exists on Bedrock.
-const DEFAULT_MODEL = 'us.anthropic.claude-sonnet-4-20250514-v1:0';
+// public/js/state.js  — change only this one line
+const DEFAULT_MODEL = 'global.anthropic.claude-sonnet-4-6';
+
 
 // Track the current model's display name
 let currentModelName = 'Assistant';
