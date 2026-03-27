@@ -1,9 +1,6 @@
-// ═══════════════════════════════════════════════════════════════════════════
-// CONVERSATIONS — CRUD + chat list rendering
-// ═══════════════════════════════════════════════════════════════════════════
+// public/js/conversations.js — FULL REPLACEMENT
 
 function isMobile() { return window.innerWidth <= 768; }
-
 function getConvo(id) { return conversations.find(c => c.id === id); }
 function saveConvos() { localStorage.setItem('brc_convos', JSON.stringify(conversations)); }
 function saveUnread() { localStorage.setItem('brc_unread', JSON.stringify(unreadCounts)); }
@@ -14,15 +11,17 @@ function bumpConvoToTop(id) {
 }
 
 function newChat() {
-  // Don't create duplicate empty chats — reuse the current one
-  if (currentConvoId) {
-    const current = getConvo(currentConvoId);
-    if (current && current.messages.length === 0) {
-      // Already on an empty chat — just close sidebar on mobile and focus
+  // Don't create duplicate empty chats — find ANY existing empty chat
+  const emptyConvo = conversations.find(c => c.messages.length === 0);
+  if (emptyConvo) {
+    // Already have an empty chat — switch to it
+    if (currentConvoId === emptyConvo.id) {
       if (isMobile() && !sidebarHidden) toggleSidebar();
       document.getElementById('msgInput')?.focus();
       return;
     }
+    loadConvo(emptyConvo.id);
+    return;
   }
 
   const id = Date.now().toString();
@@ -33,7 +32,6 @@ function newChat() {
 
 function loadConvo(id) {
   saveConvos();
-
   currentConvoId = id;
   userScrolledUp = false;
   _setScrollBtnVisible(false);
@@ -41,10 +39,7 @@ function loadConvo(id) {
   const convo = getConvo(id);
   if (!convo) return;
 
-  // Auto-close sidebar on mobile after selecting a conversation
-  if (isMobile() && !sidebarHidden) {
-    toggleSidebar();
-  }
+  if (isMobile() && !sidebarHidden) toggleSidebar();
 
   renderChatList();
 
@@ -63,6 +58,33 @@ function loadConvo(id) {
 
   closeSidePanel();
   scrollBottom();
+}
+
+function deleteChat(id) {
+  // Can't delete a streaming chat
+  if (streamRegistry.has(id)) {
+    toast('Stop the current response first', 'error');
+    return;
+  }
+
+  const idx = conversations.findIndex(c => c.id === id);
+  if (idx === -1) return;
+
+  conversations.splice(idx, 1);
+  delete unreadCounts[id];
+  saveConvos();
+  saveUnread();
+
+  // If we deleted the current chat, switch to another
+  if (currentConvoId === id) {
+    if (conversations.length > 0) {
+      loadConvo(conversations[0].id);
+    } else {
+      newChat();
+    }
+  } else {
+    renderChatList();
+  }
 }
 
 function clearAll() {
@@ -92,32 +114,17 @@ function startRename(id, el) {
   };
 }
 
-// ─── Sidebar ──────────────────────────────────────────────────────────────
 function toggleSidebar() {
   sidebarHidden = !sidebarHidden;
   localStorage.setItem('brc_sidebar_hidden', sidebarHidden);
   document.getElementById('sidebar').classList.toggle('collapsed', sidebarHidden);
-
-  // When OPENING sidebar, close side panel if it would be too cramped
-  if (!sidebarHidden) {
-    const sidePanel = document.getElementById('sidePanel');
-    if (sidePanel?.classList.contains('open')) {
-      const avail = window.innerWidth - 260; // sidebar width
-      if (avail < 700) {
-        closeSidePanel();
-      }
-    }
-  }
 }
 
 function applySidebarState() {
-  if (isMobile() && localStorage.getItem('brc_sidebar_hidden') === null) {
-    sidebarHidden = true;
-  }
+  if (isMobile() && localStorage.getItem('brc_sidebar_hidden') === null) sidebarHidden = true;
   document.getElementById('sidebar').classList.toggle('collapsed', sidebarHidden);
 }
 
-// ─── Chat list render ─────────────────────────────────────────────────────
 function renderChatList() {
   const el = document.getElementById('chatList');
   el.innerHTML = '';
@@ -126,11 +133,40 @@ function renderChatList() {
     const unread = unreadCounts[c.id] || 0;
     const item = document.createElement('div');
     item.className = 'chat-item' + (c.id === currentConvoId ? ' active' : '');
-    item.innerHTML = `
-      <div class="chat-item-dot"></div>
-      <span class="chat-item-label">${esc(c.title)}</span>
-      ${isStream ? '<div class="chat-item-streaming"><span></span><span></span><span></span></div>'
-        : unread > 0 ? `<div class="unread-badge">${unread > 9 ? '9+' : unread}</div>` : ''}`;
+
+    const dot = document.createElement('div');
+    dot.className = 'chat-item-dot';
+
+    const label = document.createElement('span');
+    label.className = 'chat-item-label';
+    label.textContent = c.title;
+
+    item.appendChild(dot);
+    item.appendChild(label);
+
+    if (isStream) {
+      const streaming = document.createElement('div');
+      streaming.className = 'chat-item-streaming';
+      streaming.innerHTML = '<span></span><span></span><span></span>';
+      item.appendChild(streaming);
+    } else if (unread > 0) {
+      const badge = document.createElement('div');
+      badge.className = 'unread-badge';
+      badge.textContent = unread > 9 ? '9+' : unread;
+      item.appendChild(badge);
+    }
+
+    // Delete button
+    const delBtn = document.createElement('button');
+    delBtn.className = 'chat-item-delete';
+    delBtn.innerHTML = '×';
+    delBtn.title = 'Delete chat';
+    delBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteChat(c.id);
+    });
+    item.appendChild(delBtn);
+
     item.onclick = () => loadConvo(c.id);
     item.ondblclick = e => { e.stopPropagation(); startRename(c.id, item); };
     el.appendChild(item);

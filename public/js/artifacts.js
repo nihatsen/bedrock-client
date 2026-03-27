@@ -80,23 +80,52 @@ function _isNonFileContent(code, lang) {
   const urlLabelLines = lines.filter(l => /^\s*\w+:\s+https?:\/\//.test(l));
   if (urlLabelLines.length >= 2 && total <= 15) return true;
 
-  if (['text','txt','','plaintext'].includes(lo)) {
-    const tabbedLines = lines.filter(l => /^\s{2,}\S/.test(l) || l.includes('\t'));
-    if (tabbedLines.length > total * 0.4 && total > 5) return true;
+  // Only check plaintext indentation for ACTUAL plaintext, not code languages
+  if (['text','txt','plaintext'].includes(lo) || lo === '') {
+    // Skip this check if the code has programming-language-like content
+    const codeIndicators = lines.filter(l =>
+      /\b(const|let|var|function|class|import|export|require|return|if|for|while)\b/.test(l)
+    );
+    if (codeIndicators.length === 0) {
+      const tabbedLines = lines.filter(l => /^\s{2,}\S/.test(l) || l.includes('\t'));
+      if (tabbedLines.length > total * 0.4 && total > 5) return true;
+    }
+
     const emojiLines = lines.filter(l => /[\u{1F300}-\u{1FFFF}\u{2600}-\u{27BF}]/u.test(l));
     if (emojiLines.length > total * 0.3 && total > 3) return true;
   }
   return false;
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════════
+// _shouldBeFile — FIXED PRIORITY ORDER
+//
+// BEFORE: Content checks ran first → could reject files with identifiable names
+// AFTER:  Filename checks run first → if we KNOW it's a file, skip heuristics
+// ═══════════════════════════════════════════════════════════════════════════
+
 function _shouldBeFile(code, lang, pre) {
+  // PRIORITY 1: If code has a filename comment (// filename.js), it's ALWAYS a file
+  if (_extractFilenameFromCode(code)) return true;
+
+  // PRIORITY 2: If DOM heading has a clear filename, it's ALWAYS a file
+  if (_extractFilenameFromDom(pre)) return true;
+
+  // PRIORITY 3: Content-based rejection (only for blocks without known filenames)
   if (_isNonFileContent(code, lang)) return false;
   if (_isNonFileContext(pre)) return false;
-  if (_extractFilenameFromDom(pre)) return true;
-  if (_extractFilenameFromCode(code)) return true;
+
+  // PRIORITY 4: Line threshold for unnamed blocks
   if (code.split('\n').length < WRAP_THRESHOLD) return false;
+
   return true;
 }
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FILENAME EXTRACTION
+// ═══════════════════════════════════════════════════════════════════════════
 
 function _extractFilenameFromCode(code) {
   if (!code) return null;
@@ -118,20 +147,29 @@ function _extractFilenameFromDom(pre) {
     if (!rawText || rawText.length > 200) { el = el.previousElementSibling; continue; }
     const text = _stripLeadingDecorators(rawText);
     if (text.length <= 120) {
+      // Path: src/config/database.js
       const pm = text.match(/(?:^|\s)((?:\.?\.?\/)?(?:[a-zA-Z0-9_.-]+\/)+[a-zA-Z0-9_.][a-zA-Z0-9_.-]*\.[a-zA-Z]{1,10})\s*:?\s*$/);
       if (pm) { const f = pm[1].split('/').pop(); if (!_notFilenames.has(f.toLowerCase())) return f; }
       if (text.length <= 60) {
-        const fm = text.match(/^[`*"']?(\.[a-zA-Z0-9_.-]+)[`*"':)]*\s*$/);
-        if (fm) return fm[1];
+        // Dotfile: .env, .env.example
+        const fm = text.match(/^[`*"']?(\.[a-zA-Z][a-zA-Z0-9_.-]*)[`*"':)]*\s*$/);
+        if (fm && fm[1].length >= 4) return fm[1];
+        // Regular: server.js, package.json
         const fm2 = text.match(/^[`*"']?([a-zA-Z0-9_][a-zA-Z0-9_.-]*\.[a-zA-Z]{1,10})[`*"':)]*\s*$/);
         if (fm2 && !_notFilenames.has(fm2[1].toLowerCase())) return fm2[1];
       }
     }
+    // Check inline <code> — but skip CSS-like selectors (.class-name)
     for (const c of el.querySelectorAll('code')) {
       const ct = c.textContent.trim();
       if (ct.length >= 3 && ct.length <= 80) {
-        const dm = ct.match(/(?:.*\/)?(\.[a-zA-Z0-9_.-]+)$/);
+        // Skip CSS selectors and similar
+        if (/^[.#]\w+[-\w]*$/.test(ct)) continue;
+        if (ct.includes('[') && ct.includes(']')) continue;
+        // Dotfile
+        const dm = ct.match(/(?:.*\/)?(\.[a-zA-Z][a-zA-Z0-9_.-]*)$/);
         if (dm && dm[1].includes('.') && dm[1].length >= 4) return dm[1];
+        // Regular file
         const m2 = ct.match(/(?:.*\/)?([a-zA-Z0-9_][a-zA-Z0-9_.-]*\.[a-zA-Z]{1,10})$/);
         if (m2 && !_notFilenames.has(m2[1].toLowerCase())) return m2[1];
       }
@@ -188,16 +226,10 @@ function _updateShowMore(wrap, totalLines, maxH, isExp) {
   if (isExp) sm.classList.add('hidden'); else sm.classList.toggle('hidden', hid <= 0);
 }
 
-// ─── Collapse footer: entire bar is clickable ─────────────────────────────
 function _buildCodeFooter() {
-  const f = document.createElement('div');
-  f.className = 'code-footer';
-  f.dataset.action = 'collapse'; // action on the whole bar
-  const b = document.createElement('button');
-  b.className = 'code-footer-btn';
-  b.textContent = '▴ Collapse';
-  f.appendChild(b);
-  return f;
+  const f = document.createElement('div'); f.className = 'code-footer'; f.dataset.action = 'collapse';
+  const b = document.createElement('button'); b.className = 'code-footer-btn'; b.textContent = '▴ Collapse';
+  f.appendChild(b); return f;
 }
 
 function _getWrapInfo(wrap) {
@@ -242,11 +274,7 @@ function _toggleExpand(wrap) {
   _setExpanded(wrap, !(_streamExpanded[msgId]?.[idx] || false));
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// EVENT DELEGATION — handles code-btn, code-footer, code-showmore
-// ═══════════════════════════════════════════════════════════════════════════
 document.addEventListener('click', function(e) {
-  // Header buttons
   const codeBtn = e.target.closest('.code-btn[data-action]');
   if (codeBtn) {
     e.stopPropagation();
@@ -260,24 +288,10 @@ document.addEventListener('click', function(e) {
     }
     return;
   }
-
-  // Collapse footer — entire bar is clickable
   const footer = e.target.closest('.code-footer[data-action="collapse"]');
-  if (footer) {
-    e.stopPropagation();
-    const wrap = footer.closest('.stream-wrap');
-    if (wrap) _setExpanded(wrap, false);
-    return;
-  }
-
-  // Show more bar
+  if (footer) { e.stopPropagation(); const w = footer.closest('.stream-wrap'); if (w) _setExpanded(w, false); return; }
   const sm = e.target.closest('.code-showmore');
-  if (sm) {
-    e.stopPropagation();
-    const wrap = sm.closest('.stream-wrap');
-    if (wrap) _setExpanded(wrap, true);
-    return;
-  }
+  if (sm) { e.stopPropagation(); const w = sm.closest('.stream-wrap'); if (w) _setExpanded(w, true); return; }
 }, true);
 
 
@@ -344,13 +358,13 @@ function hlStreaming(container, msgId, savedWraps) {
     wrap.dataset.lang = lang; wrap.dataset.fname = fname; wrap.dataset.maxh = String(maxH);
     const hdr = _buildCodeHeader(lang, fname, lines);
     const showMore = _buildShowMore(lines, maxH);
-    const footer = _buildCodeFooter();
+    const footer2 = _buildCodeFooter();
     const preWrap = document.createElement('div'); preWrap.className = 'code-pre-wrap'; preWrap.style.maxHeight = maxH + 'px';
     const fade = document.createElement('div'); fade.className = 'stream-code-fade';
     pre.style.margin = pre.style.borderRadius = pre.style.border = '0';
     pre.replaceWith(wrap);
     preWrap.appendChild(pre); preWrap.appendChild(fade);
-    wrap.appendChild(hdr); wrap.appendChild(preWrap); wrap.appendChild(showMore); wrap.appendChild(footer);
+    wrap.appendChild(hdr); wrap.appendChild(preWrap); wrap.appendChild(showMore); wrap.appendChild(footer2);
     if (_streamExpanded[msgId]?.[idxKey]) _setExpanded(wrap, true);
   });
 }
@@ -376,7 +390,7 @@ function processCodeBlocks(container) {
     wrap.dataset.lang = lang; wrap.dataset.fname = fname; wrap.dataset.maxh = String(maxH);
     const hdr = _buildCodeHeader(lang, fname, lines);
     const showMore = _buildShowMore(lines, maxH);
-    const footer = _buildCodeFooter();
+    const footer2 = _buildCodeFooter();
     const eb = hdr.querySelector('.code-btn[data-action="expand"]');
     const preWrap = document.createElement('div'); preWrap.className = 'code-pre-wrap';
     pre.style.margin = pre.style.borderRadius = pre.style.border = '0';
@@ -389,10 +403,10 @@ function processCodeBlocks(container) {
       if (eb) eb.textContent = '▾ Expand';
     } else {
       preWrap.appendChild(pre); wrap.appendChild(preWrap);
-      showMore.classList.add('hidden'); footer.classList.add('visible');
+      showMore.classList.add('hidden'); footer2.classList.add('visible');
       if (eb) eb.textContent = '▴ Collapse';
     }
-    wrap.appendChild(footer);
+    wrap.appendChild(footer2);
   });
 }
 

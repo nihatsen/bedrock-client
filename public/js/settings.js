@@ -1,9 +1,5 @@
 // public/js/settings.js — FULL REPLACEMENT
 
-// ═══════════════════════════════════════════════════════════════════════════
-// SETTINGS — Load, save, open, close modal
-// ═══════════════════════════════════════════════════════════════════════════
-
 function syncSettingsForm() {
   const el = id => document.getElementById(id);
   if (el('settingsApiKey'))    el('settingsApiKey').value    = settings.apiKey      || '';
@@ -31,7 +27,10 @@ function handleSettingsOverlayClick(e) {
 }
 
 function saveSettings() {
-  const prev = { apiKey: settings.apiKey, region: settings.region };
+  const prev = {
+    apiKey: settings.apiKey,
+    region: settings.region,
+  };
 
   settings.apiKey      = document.getElementById('settingsApiKey')?.value.trim()         || '';
   settings.region      = document.getElementById('settingsRegion')?.value.trim()         || 'us-east-1';
@@ -43,7 +42,7 @@ function saveSettings() {
   closeSettings();
   toast('Settings saved', 'success');
 
-  // Reload model list if credentials changed
+  // Reload models if API key OR region changed
   const credChanged = prev.apiKey !== settings.apiKey || prev.region !== settings.region;
   if (credChanged) loadModels();
 }

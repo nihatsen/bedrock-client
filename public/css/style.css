@@ -117,6 +117,7 @@ html, body {
   font-size: 12px; color: var(--text1); transition: all 0.12s;
   display: flex; align-items: center; gap: 8px; margin-bottom: 1px;
   border: 1px solid transparent; min-height: 38px;
+  position: relative;
 }
 .chat-item:hover { background: var(--bg3); color: var(--text0); }
 .chat-item.active { background: var(--accent-glow); border-color: rgba(212,165,116,0.2); color: var(--accent); }
@@ -135,6 +136,26 @@ html, body {
   background: var(--accent); color: #000; font-size: 9px; font-weight: 700;
   font-family: var(--mono); display: flex; align-items: center; justify-content: center;
 }
+
+/* ─── Chat item delete button ─────────────────────────────────────────────── */
+.chat-item-delete {
+  display: none;
+  width: 20px; height: 20px;
+  border-radius: 4px;
+  background: none;
+  border: none;
+  color: var(--text3);
+  font-size: 14px;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.12s;
+  line-height: 1;
+  padding: 0;
+}
+.chat-item:hover .chat-item-delete { display: flex; }
+.chat-item-delete:hover { color: var(--pink); background: rgba(232,122,144,0.15); }
 
 .sidebar-footer { border-top: 1px solid var(--border); padding: 8px; display: flex; flex-direction: column; gap: 2px; }
 .sidebar-btn {
@@ -325,11 +346,9 @@ html, body {
   transition: color 0.15s;
   min-height: 28px;
   cursor: pointer;
-  pointer-events: none; /* clicks go through to parent .code-footer */
+  pointer-events: none;
 }
 .code-footer:hover .code-footer-btn { color: var(--accent); }
-
-.stream-code-fade { position: absolute; bottom: 0; left: 0; right: 0; height: 70px; background: linear-gradient(transparent, var(--code-bg)); pointer-events: none; z-index: 1; }
 
 /* ─── CODE PRE WRAPPER ────────────────────────────────────────────────────── */
 .code-pre-wrap { position: relative; overflow: hidden; }
@@ -342,7 +361,6 @@ html, body {
 .code-showmore:hover .code-showmore-btn { color: var(--accent); }
 
 /* ─── SIMPLE CODE BLOCK overlay ───────────────────────────────────────────── */
-.msg-body pre { position: relative; }
 .code-simple-actions { position: absolute; top: 6px; right: 8px; display: flex; align-items: center; gap: 6px; opacity: 0; transition: opacity 0.15s; z-index: 2; }
 pre:hover > .code-simple-actions { opacity: 1; }
 .code-simple-actions:hover { opacity: 1; }
@@ -350,6 +368,8 @@ pre:hover > .code-simple-actions { opacity: 1; }
 .code-simple-copy { font-family: var(--mono); font-size: 10px; color: var(--text2); background: rgba(0,0,0,0.35); border: 1px solid transparent; padding: 2px 8px; border-radius: 4px; cursor: pointer; transition: all 0.12s; }
 .code-simple-copy:hover { color: var(--text0); background: var(--bg4); border-color: var(--border); }
 .code-simple-copy.success { color: var(--green); border-color: var(--green); }
+
+.stream-code-fade { position: absolute; bottom: 0; left: 0; right: 0; height: 70px; background: linear-gradient(transparent, var(--code-bg)); pointer-events: none; z-index: 1; }
 
 /* ─── STREAMING INDICATOR ────────────────────────────────────────────────── */
 .stream-indicator { display: inline-flex; align-items: center; gap: 6px; padding: 4px 0; min-height: 24px; }
@@ -479,8 +499,7 @@ pre:hover > .code-simple-actions { opacity: 1; }
   display: flex; flex-direction: column; overflow: hidden;
   transition: width 0.3s ease; position: relative;
 }
-/* Use clamp so it adapts regardless of sidebar state */
-.side-panel.open { width: clamp(300px, 40vw, 800px); }
+.side-panel.open { width: 50%; min-width: 280px; max-width: 700px; }
 .side-panel.no-transition { transition: none !important; }
 
 .sp-resize-handle { position: absolute; left: 0; top: 0; bottom: 0; width: 5px; cursor: col-resize; z-index: 10; background: transparent; transition: background 0.15s; }
@@ -607,6 +626,8 @@ pre:hover > .code-simple-actions { opacity: 1; }
   .form-row { flex-direction: column; gap: 14px; }
   .drop-zone { padding: 30px 40px; }
   .drop-title { font-size: 16px; }
+
+  .chat-item-delete { display: flex; opacity: 0.5; }
 }
 
 @media (max-width: 480px) {
@@ -707,4 +728,5 @@ pre:hover > .code-simple-actions { opacity: 1; }
   .topbar-budget input[type=range]::-webkit-slider-thumb { width: 20px; height: 20px; }
   .range-row input[type=range]::-webkit-slider-thumb { width: 24px; height: 24px; }
   .code-simple-actions { opacity: 0.7; }
+  .chat-item-delete { display: flex; opacity: 0.5; }
 }

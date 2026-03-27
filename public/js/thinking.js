@@ -1,6 +1,4 @@
-// ═══════════════════════════════════════════════════════════════════════════
-// THINKING — Toggle, budget, block builder (all persisted)
-// ═══════════════════════════════════════════════════════════════════════════
+// public/js/thinking.js — FULL REPLACEMENT
 
 function toggleThinking() {
   thinkingOn = !thinkingOn;
@@ -27,7 +25,7 @@ function onModelChange() {
   const sel = document.getElementById('modelSelect');
   const opt = sel.selectedOptions[0];
   const supports = opt?.dataset.supportsThinking === 'true';
-  const maxOut = parseInt(opt?.dataset.maxOutputTokens || '32000');
+  const newMax = parseInt(opt?.dataset.maxOutputTokens || '32000');
 
   const rawName = opt?.textContent || 'Assistant';
   currentModelName = rawName.replace(/\s*\(.*?\)\s*$/, '').trim();
@@ -45,16 +43,32 @@ function onModelChange() {
     document.getElementById('budgetWrap').classList.add('hidden');
   }
 
+  // ── Budget auto-scale ──────────────────────────────────────────────
+  // If budget was at the max of the old model, scale to new max.
+  // Otherwise keep current value clamped to new range.
   const slider = document.getElementById('budgetSlider');
-  slider.max = maxOut;
-  slider.value = Math.max(1024, Math.min(thinkingBudget, maxOut));
-  updateBudgetLabel();
+  const oldMax = parseInt(slider.max || '32000');
+  const oldBudget = thinkingBudget;
+  const wasAtMax = oldBudget >= oldMax - 1024; // within 1 step of max
+
+  slider.max = newMax;
+
+  if (wasAtMax && newMax !== oldMax) {
+    // Was at max → set to new max
+    thinkingBudget = newMax;
+  } else {
+    // Keep current value, clamped
+    thinkingBudget = Math.max(1024, Math.min(thinkingBudget, newMax));
+  }
+
+  slider.value = thinkingBudget;
+  localStorage.setItem('brc_thinking_budget', thinkingBudget);
+  document.getElementById('budgetLabel').textContent = tokStr(thinkingBudget);
 
   settings.modelId = sel.value;
   localStorage.setItem('brc_settings', JSON.stringify(settings));
 }
 
-// ─── Build thinking block DOM ─────────────────────────────────────────────
 function buildThinkingBlock(text, streaming = false, budget = 0) {
   const tb = document.createElement('div');
   tb.className = 'thinking-block collapsed';
@@ -105,20 +119,12 @@ function buildThinkingBlock(text, streaming = false, budget = 0) {
 
   contentWrap.appendChild(content);
 
-  // FIX: Add a collapse footer at the BOTTOM of the thinking block.
-  // When expanded, the thinking content can be 400px tall. The collapse
-  // toggle is in the header at the top. If you've scrolled down through
-  // the thinking, you have to scroll back up to find the header to collapse.
-  // This footer provides a second collapse button at the bottom.
   const footer = document.createElement('div');
   footer.className = 'thinking-footer';
   const collapseBtn = document.createElement('button');
   collapseBtn.className = 'thinking-collapse-btn';
   collapseBtn.textContent = '▴ Collapse reasoning';
-  collapseBtn.onclick = (e) => {
-    e.stopPropagation();
-    tb.classList.add('collapsed');
-  };
+  collapseBtn.onclick = (e) => { e.stopPropagation(); tb.classList.add('collapsed'); };
   footer.appendChild(collapseBtn);
 
   tb.appendChild(header);
