@@ -51,9 +51,9 @@
   word-break: normal;
 }
 .sp-line:first-child .sp-line-num,
-.sp-line:first-child .sp-line-code { padding-top: 16px; }
+.sp-line:first-child .sp-line-code { padding-top: 4px; }
 .sp-line:last-child .sp-line-num,
-.sp-line:last-child .sp-line-code  { padding-bottom: 16px; }
+.sp-line:last-child .sp-line-code  { padding-bottom: 12px; }
 
 .side-panel-body.wrap-on { overflow-x: hidden; }
 .side-panel-body.wrap-on .sp-line-code { white-space: pre-wrap; word-break: break-all; }

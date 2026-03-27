@@ -126,7 +126,7 @@ function _processAsync(code, lang) {
 // VIRTUAL SCROLL
 // ═══════════════════════════════════════════════════════════════════════════
 const VS_ROW_H  = 21.45;
-const VS_PAD    = 16;
+const VS_PAD    = 4;
 const VS_BUFFER = 20;
 
 let _vsLines     = [];
