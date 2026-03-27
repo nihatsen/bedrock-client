@@ -5,10 +5,30 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>Bedrock Chat</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23d4a574'/%3E%3Ctext x='16' y='23' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='800' font-size='18' fill='%231a1a1a'%3EB%3C/text%3E%3C/svg%3E">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+
+<!-- DNS prefetch for CDNs so connections start immediately -->
+<link rel="dns-prefetch" href="https://cdnjs.cloudflare.com">
+<link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
+<link rel="dns-prefetch" href="https://fonts.googleapis.com">
+<link rel="dns-prefetch" href="https://fonts.gstatic.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+
+<!-- Google Fonts: non-blocking load (media=print trick) -->
+<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&family=Inter:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&family=Inter:wght@400;500;600;700&display=swap" media="print" onload="this.media='all'">
+<noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&family=Inter:wght@400;500;600;700&display=swap"></noscript>
+
+<!-- Highlight.js CSS: non-blocking -->
+<link rel="preload" as="style" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css" media="print" onload="this.media='all'">
+<noscript><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css"></noscript>
+
+<!-- Local CSS: only blocking stylesheet — loads from same server, fast -->
 <link rel="stylesheet" href="/css/style.css">
+
+<!-- Preload CDN scripts so they download early -->
+<link rel="preload" as="script" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js">
+<link rel="preload" as="script" href="https://cdn.jsdelivr.net/npm/marked/marked.min.js">
 </head>
 <body>
 
@@ -45,7 +65,7 @@
     </div>
   </aside>
 
-  <!-- ─── SIDEBAR BACKDROP (mobile) ───────────────────────────────────── -->
+  <!-- ─── SIDEBAR BACKDROP ─────────────────────────────────────────────── -->
   <div class="sidebar-backdrop" id="sidebarBackdrop" onclick="toggleSidebar()"></div>
 
   <!-- ─── MAIN CONTENT ────────────────────────────────────────────────── -->
@@ -122,14 +142,13 @@
 
     <!-- ─── SIDE PANEL (Code Viewer) ──────────────────────────────────── -->
     <aside class="side-panel" id="sidePanel">
-      <!-- Drag to resize -->
       <div class="sp-resize-handle" id="spResizeHandle" title="Drag to resize"></div>
 
       <div class="side-panel-header">
         <span class="side-panel-title" id="sidePanelTitle">Code</span>
         <span class="side-panel-lang"  id="sidePanelLang">JS</span>
         <div class="side-panel-actions">
-          <button class="sp-btn" id="spWrapBtn" onclick="toggleSidePanelWrap()" title="Toggle word wrap">↵ Wrap: on</button>
+          <button class="sp-btn" id="spWrapBtn" onclick="toggleSidePanelWrap()">↵ Wrap: on</button>
           <button class="sp-btn" id="spCopyBtn" onclick="copySidePanel()">Copy</button>
           <button class="sp-btn" onclick="downloadSidePanel()">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
@@ -137,7 +156,6 @@
           <button class="sp-btn" onclick="closeSidePanel()">✕</button>
         </div>
       </div>
-      <!-- Body: table rendered by JS into spCodeWrap -->
       <div class="side-panel-body" id="sidePanelBody">
         <div id="spCodeWrap"></div>
       </div>
@@ -167,74 +185,38 @@
       <button class="modal-close" onclick="closeSettings()">✕</button>
     </div>
     <div class="modal-body">
-
       <div class="form-group">
         <label>Bedrock API Key (Bearer Token)</label>
         <input type="password" class="form-input" id="settingsApiKey" placeholder="ABSK…">
       </div>
-
       <div class="form-row">
         <div class="form-group">
           <label>AWS Region</label>
-          <input
-            class="form-input"
-            id="settingsRegion"
-            list="regionList"
-            placeholder="e.g. us-east-1"
-            autocomplete="off"
-            spellcheck="false"
-          >
+          <input class="form-input" id="settingsRegion" list="regionList" placeholder="e.g. us-east-1" autocomplete="off" spellcheck="false">
           <datalist id="regionList">
-            <!-- US East -->
             <option value="us-east-1">us-east-1 — N. Virginia</option>
             <option value="us-east-2">us-east-2 — Ohio</option>
-            <!-- US West -->
             <option value="us-west-2">us-west-2 — Oregon</option>
-            <!-- Canada -->
             <option value="ca-central-1">ca-central-1 — Central</option>
-            <option value="ca-west-1">ca-west-1 — Calgary</option>
-            <!-- Europe -->
             <option value="eu-west-1">eu-west-1 — Ireland</option>
             <option value="eu-west-2">eu-west-2 — London</option>
-            <option value="eu-west-3">eu-west-3 — Paris</option>
             <option value="eu-central-1">eu-central-1 — Frankfurt</option>
-            <option value="eu-central-2">eu-central-2 — Zurich</option>
-            <option value="eu-north-1">eu-north-1 — Stockholm</option>
-            <option value="eu-south-1">eu-south-1 — Milan</option>
-            <option value="eu-south-2">eu-south-2 — Spain</option>
-            <!-- Asia Pacific -->
             <option value="ap-northeast-1">ap-northeast-1 — Tokyo</option>
-            <option value="ap-northeast-2">ap-northeast-2 — Seoul</option>
-            <option value="ap-northeast-3">ap-northeast-3 — Osaka</option>
             <option value="ap-southeast-1">ap-southeast-1 — Singapore</option>
             <option value="ap-southeast-2">ap-southeast-2 — Sydney</option>
-            <option value="ap-southeast-3">ap-southeast-3 — Jakarta</option>
-            <option value="ap-southeast-4">ap-southeast-4 — Melbourne</option>
-            <option value="ap-southeast-5">ap-southeast-5 — Malaysia</option>
             <option value="ap-south-1">ap-south-1 — Mumbai</option>
-            <option value="ap-south-2">ap-south-2 — Hyderabad</option>
-            <option value="ap-east-1">ap-east-1 — Hong Kong</option>
-            <!-- Middle East & Africa -->
-            <option value="me-south-1">me-south-1 — Bahrain</option>
-            <option value="me-central-1">me-central-1 — UAE</option>
-            <option value="af-south-1">af-south-1 — Cape Town</option>
-            <option value="il-central-1">il-central-1 — Tel Aviv</option>
-            <!-- South America -->
             <option value="sa-east-1">sa-east-1 — São Paulo</option>
           </datalist>
         </div>
-
         <div class="form-group">
           <label>Max Tokens</label>
           <input type="number" class="form-input" id="settingsMaxTokens" value="16000" min="256" max="200000" step="256">
         </div>
       </div>
-
       <div class="form-group">
         <label>System Prompt</label>
         <textarea class="form-input form-textarea" id="settingsSystem" placeholder="You are a helpful assistant…"></textarea>
       </div>
-
       <div class="form-group">
         <label>Temperature <span class="hint">(non-thinking mode)</span></label>
         <div class="range-row">
@@ -243,7 +225,6 @@
           <span id="tempVal">0.7</span>
         </div>
       </div>
-
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeSettings()">Cancel</button>
@@ -255,22 +236,22 @@
 <!-- ─── TOAST ─────────────────────────────────────────────────────────── -->
 <div class="toast" id="toast"></div>
 
-<button class="scroll-bottom-btn" id="scrollBtn" onclick="scrollBottom()" title="Scroll to bottom">
-  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
-</button>
+<!-- ─── ALL SCRIPTS: defer so they never block rendering ─────────────── -->
+<!-- CDN scripts download in parallel with page parse -->
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<!-- Local scripts execute in order after CDN scripts -->
+<script defer src="/js/state.js"></script>
+<script defer src="/js/utils.js"></script>
+<script defer src="/js/conversations.js"></script>
+<script defer src="/js/thinking.js"></script>
+<script defer src="/js/artifacts.js"></script>
+<script defer src="/js/sidepanel.js"></script>
+<script defer src="/js/messages.js"></script>
+<script defer src="/js/stream.js"></script>
+<script defer src="/js/input.js"></script>
+<script defer src="/js/settings.js"></script>
+<script defer src="/js/init.js"></script>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-<script src="/js/state.js"></script>
-<script src="/js/utils.js"></script>
-<script src="/js/conversations.js"></script>
-<script src="/js/thinking.js"></script>
-<script src="/js/artifacts.js"></script>
-<script src="/js/sidepanel.js"></script>
-<script src="/js/messages.js"></script>
-<script src="/js/stream.js"></script>
-<script src="/js/input.js"></script>
-<script src="/js/settings.js"></script>
-<script src="/js/init.js"></script>
 </body>
 </html>
