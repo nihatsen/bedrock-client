@@ -2,6 +2,8 @@
 // CONVERSATIONS — CRUD + chat list rendering
 // ═══════════════════════════════════════════════════════════════════════════
 
+function isMobile() { return window.innerWidth <= 768; }
+
 function getConvo(id) { return conversations.find(c => c.id === id); }
 function saveConvos() { localStorage.setItem('brc_convos', JSON.stringify(conversations)); }
 function saveUnread() { localStorage.setItem('brc_unread', JSON.stringify(unreadCounts)); }
@@ -12,6 +14,17 @@ function bumpConvoToTop(id) {
 }
 
 function newChat() {
+  // Don't create duplicate empty chats — reuse the current one
+  if (currentConvoId) {
+    const current = getConvo(currentConvoId);
+    if (current && current.messages.length === 0) {
+      // Already on an empty chat — just close sidebar on mobile and focus
+      if (isMobile() && !sidebarHidden) toggleSidebar();
+      document.getElementById('msgInput')?.focus();
+      return;
+    }
+  }
+
   const id = Date.now().toString();
   conversations.unshift({ id, title: 'New Conversation', messages: [], createdAt: Date.now() });
   saveConvos();
@@ -19,10 +32,6 @@ function newChat() {
 }
 
 function loadConvo(id) {
-  // FIX: Save current conversation state BEFORE switching away.
-  // During streaming, msg.text is updated in memory every text_delta but
-  // only flushed to localStorage on a 2-second interval. Saving here
-  // ensures nothing is lost when the user clicks between chats.
   saveConvos();
 
   currentConvoId = id;
@@ -31,21 +40,23 @@ function loadConvo(id) {
   if (unreadCounts[id]) { delete unreadCounts[id]; saveUnread(); }
   const convo = getConvo(id);
   if (!convo) return;
+
+  // Auto-close sidebar on mobile after selecting a conversation
+  if (isMobile() && !sidebarHidden) {
+    toggleSidebar();
+  }
+
   renderChatList();
 
   const ctx = streamRegistry.get(id);
   renderMessages(convo.messages, ctx?.assistantMsgId);
 
-  // FIX: If this conversation has an active stream, tell the streaming UI
-  // and ensure the render cycle picks up the new DOM elements.
   const isStreaming = streamRegistry.has(id);
   setStreamingUI(isStreaming);
 
-  // If actively streaming, kick a render so the new DOM shows latest text
   if (isStreaming && ctx) {
     const aMsg = convo.messages.find(m => m.id === ctx.assistantMsgId);
     if (aMsg && aMsg.text) {
-      // Force an immediate render with the latest accumulated text
       setTimeout(() => _flushRender(aMsg.id, aMsg), 50);
     }
   }
@@ -86,9 +97,23 @@ function toggleSidebar() {
   sidebarHidden = !sidebarHidden;
   localStorage.setItem('brc_sidebar_hidden', sidebarHidden);
   document.getElementById('sidebar').classList.toggle('collapsed', sidebarHidden);
+
+  // When OPENING sidebar, close side panel if it would be too cramped
+  if (!sidebarHidden) {
+    const sidePanel = document.getElementById('sidePanel');
+    if (sidePanel?.classList.contains('open')) {
+      const avail = window.innerWidth - 260; // sidebar width
+      if (avail < 700) {
+        closeSidePanel();
+      }
+    }
+  }
 }
 
 function applySidebarState() {
+  if (isMobile() && localStorage.getItem('brc_sidebar_hidden') === null) {
+    sidebarHidden = true;
+  }
   document.getElementById('sidebar').classList.toggle('collapsed', sidebarHidden);
 }
 

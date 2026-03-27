@@ -1,572 +1,456 @@
 // public/js/artifacts.js — FULL REPLACEMENT
 
-// ═══════════════════════════════════════════════════════════════════════════
-// ARTIFACTS — hlStreaming, processCodeBlocks, buildFileList, artifact cards
-// ═══════════════════════════════════════════════════════════════════════════
-
+const WRAP_THRESHOLD = 10;
 const _streamExpanded = {};
 
-function cleanupStreamExpanded(msgId) {
-  delete _streamExpanded[msgId];
-}
+function cleanupStreamExpanded(msgId) { delete _streamExpanded[msgId]; }
 
-// ─── Language → short label ───────────────────────────────────────────────
 function langLabel(lang) {
-  const m = {
-    javascript:'JS',  js:'JS',   typescript:'TS',   ts:'TS',
-    jsx:'JSX',        tsx:'TSX', python:'PY',        py:'PY',
-    bash:'SH',        sh:'SH',   shell:'SH',         html:'HTML',
-    css:'CSS',        json:'JSON',yaml:'YAML',        yml:'YAML',
-    rust:'RS',        go:'GO',   java:'JAVA',         c:'C',
-    cpp:'C++',        ruby:'RB', php:'PHP',           sql:'SQL',
-    markdown:'MD',    md:'MD',   xml:'XML',           text:'TXT',
-  };
+  const m = { javascript:'JS',js:'JS',typescript:'TS',ts:'TS',jsx:'JSX',tsx:'TSX',python:'PY',py:'PY',bash:'SH',sh:'SH',shell:'SH',html:'HTML',css:'CSS',json:'JSON',yaml:'YAML',yml:'YAML',rust:'RS',go:'GO',java:'JAVA',c:'C',cpp:'C++',ruby:'RB',php:'PHP',sql:'SQL',markdown:'MD',md:'MD',xml:'XML',text:'TXT',env:'ENV',ini:'INI',toml:'TOML' };
   return m[(lang||'').toLowerCase()] || (lang||'TXT').slice(0,6).toUpperCase();
 }
 
-// ─── Stable ID for a code block ───────────────────────────────────────────
-// Keyed by lang + first 50 chars of code so it stays stable as streaming
-// appends to the end. This prevents the expand state from being lost when
-// the DOM index shifts (which happens when marked renders partial fences).
-function _stableId(lang, code) {
-  return (lang || 'text') + '|||' + (code || '').slice(0, 50);
+function _visibleLines(maxH) { return Math.floor((maxH - 28) / 18.75); }
+
+function _isMsgStreaming(msgId) {
+  if (!msgId) return false;
+  for (const [, ctx] of streamRegistry) { if (ctx.assistantMsgId === msgId) return true; }
+  return false;
 }
 
-// ─── Extract filename from inside code comments ───────────────────────────
+const _notFilenames = new Set(['node.js','next.js','nuxt.js','vue.js','react.js','angular.js','express.js','nest.js','deno.js','bun.js','three.js','d3.js','jquery.js','lodash.js','moment.js','svelte.js','ember.js','backbone.js','meteor.js','electron.js','gatsby.js','remix.js','astro.js','solid.js','alpine.js','chart.js','anime.js','p5.js','hapi.js','koa.js','fastify.js','vite.js','webpack.js']);
+
+const _nonFileHeadingWords = /\b(output|example\s+output|example\s+response|usage|result|running|terminal|console|log|demo|preview|response|sample|quickstart|quick\s*start|getting\s*started|install|setup|how\s*to|steps|instructions|commands|deploy|project\s+structure|directory\s+structure|folder\s+structure|structure|overview|architecture|diagram|tree|api\s+reference)\b/i;
+
+function _looksLikeFilePath(text) {
+  if (/[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+\.[a-zA-Z]{1,10}/.test(text)) return true;
+  if (/^\s*[`*"']?\.[a-zA-Z0-9_.-]+[`*"':)]*\s*$/.test(text)) return true;
+  if (text.length <= 60 && /^\s*[`*"']?[a-zA-Z0-9_][a-zA-Z0-9_.-]*\.[a-zA-Z]{1,10}[`*"':)]*\s*$/.test(text)) return true;
+  return false;
+}
+
+function _stripLeadingDecorators(text) {
+  return text.replace(/^[\s\u{1F000}-\u{1FFFF}\u{2600}-\u{27BF}\u{FE00}-\u{FE0F}\u{200D}\u{20E3}\u{E0020}-\u{E007F}]+/u, '').replace(/^[\s•·–—\-:>\d.)]+/, '').trim();
+}
+
+function _isNonFileContext(pre) {
+  if (!pre) return false;
+  let el = pre.previousElementSibling, checked = 0;
+  while (el && checked < 3) {
+    if (el.classList.contains('stream-wrap') || el.classList.contains('file-list') || el.classList.contains('artifact-cards')) { el = el.previousElementSibling; continue; }
+    checked++;
+    const rawText = el.textContent.trim();
+    if (!rawText || rawText.length > 200) { el = el.previousElementSibling; continue; }
+    const text = _stripLeadingDecorators(rawText);
+    if (_looksLikeFilePath(text)) return false;
+    for (const codeEl of el.querySelectorAll('code')) { if (_looksLikeFilePath(codeEl.textContent.trim())) return false; }
+    const tag = el.tagName?.toLowerCase();
+    const isHeading = ['h1','h2','h3','h4','h5','h6'].includes(tag);
+    if ((isHeading || text.length <= 80) && _nonFileHeadingWords.test(text)) return true;
+    if (text.length > 10) break;
+    el = el.previousElementSibling;
+  }
+  return false;
+}
+
+function _isNonFileContent(code, lang) {
+  if (!code) return false;
+  const lo = (lang || '').toLowerCase();
+  const lines = code.split('\n').filter(l => l.trim());
+  const total = lines.length;
+  if (total === 0) return false;
+
+  if (code.includes('├') || code.includes('└') || code.includes('│')) return true;
+  const asciiTreeLines = lines.filter(l => /^\s*[|`\\]\s*[├└│──|+\\\/\-]/.test(l));
+  if (asciiTreeLines.length > total * 0.4 && total > 3) return true;
+
+  if (['bash','sh','shell','zsh'].includes(lo)) {
+    const commentLines = lines.filter(l => /^\s*#/.test(l));
+    const stepComments = commentLines.filter(l => /^\s*#\s*\d+[.):]\s/i.test(l) || /^\s*#\s*(step|install|setup|clone|run|start|configure|create|build|deploy|seed|open|edit|copy|download|update|migrate|test|check)/i.test(l));
+    if (stepComments.length >= 2) return true;
+    if (commentLines.length > 0 && commentLines.length / total > 0.3 && total > 3) return true;
+  }
+
+  const httpLogLines = lines.filter(l => /\b(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\b\s+\d{3}\b/.test(l));
+  if (httpLogLines.length >= 2) return true;
+  const timestampLines = lines.filter(l => /^\s*\[?\d{1,4}[:\-/.]\d{2}[:\-/.]\d{2}/.test(l.trim()));
+  if (timestampLines.length > total * 0.3 && total > 3) return true;
+  const serverLines = lines.filter(l => /\b(listening\s+on|running\s+(at|on)|started\s+on|server\s+(is\s+)?running|waiting\s+for\s+requests)\b/i.test(l));
+  if (serverLines.length >= 1 && total <= 20) return true;
+  const urlLabelLines = lines.filter(l => /^\s*\w+:\s+https?:\/\//.test(l));
+  if (urlLabelLines.length >= 2 && total <= 15) return true;
+
+  if (['text','txt','','plaintext'].includes(lo)) {
+    const tabbedLines = lines.filter(l => /^\s{2,}\S/.test(l) || l.includes('\t'));
+    if (tabbedLines.length > total * 0.4 && total > 5) return true;
+    const emojiLines = lines.filter(l => /[\u{1F300}-\u{1FFFF}\u{2600}-\u{27BF}]/u.test(l));
+    if (emojiLines.length > total * 0.3 && total > 3) return true;
+  }
+  return false;
+}
+
+function _shouldBeFile(code, lang, pre) {
+  if (_isNonFileContent(code, lang)) return false;
+  if (_isNonFileContext(pre)) return false;
+  if (_extractFilenameFromDom(pre)) return true;
+  if (_extractFilenameFromCode(code)) return true;
+  if (code.split('\n').length < WRAP_THRESHOLD) return false;
+  return true;
+}
+
 function _extractFilenameFromCode(code) {
   if (!code) return null;
-  const firstLines = code.split('\n').slice(0, 8);
-  for (const line of firstLines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const m = trimmed.match(
-      /^(?:\/\/|#|\/\*+|\*)\s*(?:[Ff]ile(?:name)?:?\s*)?(?:[^\s]*[/\\])?([a-zA-Z0-9_][a-zA-Z0-9_.-]*\.[a-zA-Z0-9]{1,10})/
-    );
-    if (m) {
-      const fname = m[1];
-      if (fname && fname.length >= 3 && fname.length <= 60 && /^[a-zA-Z]/.test(fname)) {
-        return fname;
-      }
-    }
+  for (const line of code.split('\n').slice(0, 8)) {
+    const t = line.trim(); if (!t) continue;
+    const m = t.match(/^(?:\/\/|#|\/\*+|\*|--|;)\s*(?:[Ff]ile(?:name)?:?\s*)?(?:[^\s]*[/\\])?([a-zA-Z0-9_.][a-zA-Z0-9_.-]*\.[a-zA-Z0-9]{1,10})/);
+    if (m && m[1].length >= 3 && m[1].length <= 60) return m[1];
   }
   return null;
 }
 
-// ─── Extract filename from surrounding DOM context ────────────────────────
-// IMPORTANT: skip .stream-wrap siblings entirely — their header text contains
-// the filename of the PREVIOUS code block, not this one.
 function _extractFilenameFromDom(pre) {
   if (!pre) return null;
-  let el = pre.previousElementSibling;
-  let checked = 0;
-  while (el && checked < 6) {
-    // Skip other code blocks and file-list panels — they contain filenames
-    // that belong to those elements, not the current block.
-    if (
-      el.classList.contains('stream-wrap') ||
-      el.classList.contains('file-list')   ||
-      el.classList.contains('artifact-cards')
-    ) {
-      el = el.previousElementSibling;
-      // Don't count skipped elements toward the 6-element limit
-      continue;
-    }
-
-    const text = el.textContent.trim();
-    if (text && text.length < 300) {
-      // Match a filename (with extension) anywhere in the text, preferring
-      // the last occurrence (e.g. "Create src/utils/helper.js:" → "helper.js")
-      const re = /(?:^|[/\\ `*:([\s])([a-zA-Z0-9_][a-zA-Z0-9_-]*\.[a-zA-Z][a-zA-Z0-9]{0,9})(?:[`*)\]:\s]|$)/g;
-      let last = null;
-      let match;
-      while ((match = re.exec(text)) !== null) {
-        const fname = match[1];
-        if (
-          fname.length >= 4 &&
-          fname.length <= 80 &&
-          /^[a-zA-Z]/.test(fname) &&
-          !/^\d+$/.test(fname.split('.').pop()) // extension not all-digits
-        ) {
-          last = fname;
-        }
-      }
-      if (last) return last;
-    }
-
-    el = el.previousElementSibling;
+  let el = pre.previousElementSibling, checked = 0;
+  while (el && checked < 2) {
+    if (el.classList.contains('stream-wrap') || el.classList.contains('file-list') || el.classList.contains('artifact-cards')) { el = el.previousElementSibling; continue; }
     checked++;
+    const rawText = el.textContent.trim();
+    if (!rawText || rawText.length > 200) { el = el.previousElementSibling; continue; }
+    const text = _stripLeadingDecorators(rawText);
+    if (text.length <= 120) {
+      const pm = text.match(/(?:^|\s)((?:\.?\.?\/)?(?:[a-zA-Z0-9_.-]+\/)+[a-zA-Z0-9_.][a-zA-Z0-9_.-]*\.[a-zA-Z]{1,10})\s*:?\s*$/);
+      if (pm) { const f = pm[1].split('/').pop(); if (!_notFilenames.has(f.toLowerCase())) return f; }
+      if (text.length <= 60) {
+        const fm = text.match(/^[`*"']?(\.[a-zA-Z0-9_.-]+)[`*"':)]*\s*$/);
+        if (fm) return fm[1];
+        const fm2 = text.match(/^[`*"']?([a-zA-Z0-9_][a-zA-Z0-9_.-]*\.[a-zA-Z]{1,10})[`*"':)]*\s*$/);
+        if (fm2 && !_notFilenames.has(fm2[1].toLowerCase())) return fm2[1];
+      }
+    }
+    for (const c of el.querySelectorAll('code')) {
+      const ct = c.textContent.trim();
+      if (ct.length >= 3 && ct.length <= 80) {
+        const dm = ct.match(/(?:.*\/)?(\.[a-zA-Z0-9_.-]+)$/);
+        if (dm && dm[1].includes('.') && dm[1].length >= 4) return dm[1];
+        const m2 = ct.match(/(?:.*\/)?([a-zA-Z0-9_][a-zA-Z0-9_.-]*\.[a-zA-Z]{1,10})$/);
+        if (m2 && !_notFilenames.has(m2[1].toLowerCase())) return m2[1];
+      }
+    }
+    el = el.previousElementSibling;
   }
   return null;
 }
 
-// ─── Master filename resolver ──────────────────────────────────────────────
-function resolveFilename(code, lang, pre) {
-  return _extractFilenameFromCode(code)
-      || _extractFilenameFromDom(pre)
-      || langToFilename(lang);
-}
+function resolveFilename(code, lang, pre) { return _extractFilenameFromCode(code) || _extractFilenameFromDom(pre) || langToFilename(lang); }
+function extractFilename(code, lang) { return _extractFilenameFromCode(code) || langToFilename(lang); }
+function _hlHighlight(el) { if (!el) return; el.removeAttribute('data-highlighted'); try { hljs.highlightElement(el); } catch(e) {} }
 
-// Keep old name working for any external callers
-function extractFilename(code, lang) {
-  return _extractFilenameFromCode(code) || langToFilename(lang);
-}
-
-// ─── Safe highlight — always removes data-highlighted first ───────────────
-function _hlHighlight(el) {
-  if (!el) return;
-  el.removeAttribute('data-highlighted');
-  try { hljs.highlightElement(el); } catch(e) {}
-}
-
-// ─── Shared clipboard copy ────────────────────────────────────────────────
 function _copyText(text, btn) {
-  const doSuccess = () => {
-    const orig = btn.textContent;
-    btn.textContent = '✓ Copied';
-    btn.classList.add('success');
-    setTimeout(() => { btn.textContent = orig; btn.classList.remove('success'); }, 1500);
-  };
-  navigator.clipboard.writeText(text).then(doSuccess).catch(() => {
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    ta.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0';
-    document.body.appendChild(ta);
-    ta.select();
-    try { document.execCommand('copy'); doSuccess(); } catch(e) {}
-    document.body.removeChild(ta);
-  });
+  const ok = () => { const o = btn.textContent; btn.textContent = '✓ Copied'; btn.classList.add('success'); setTimeout(() => { btn.textContent = o; btn.classList.remove('success'); }, 1500); };
+  navigator.clipboard.writeText(text).then(ok).catch(() => { const ta = document.createElement('textarea'); ta.value = text; ta.style.cssText = 'position:fixed;top:-9999px'; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); ok(); } catch(e) {} document.body.removeChild(ta); });
 }
 
-// ─── Build code header ────────────────────────────────────────────────────
-function _buildCodeHeader(lang, fname, lines, toggleBtn, viewBtn, copyBtn, dlBtn) {
-  const hdr = document.createElement('div');
-  hdr.className = 'code-header';
-
-  const langSpan = document.createElement('span');
-  langSpan.className = 'code-lang';
-  langSpan.textContent = langLabel(lang);
-  langSpan.dataset.lang = lang.toLowerCase();
-
-  const fnameSpan = document.createElement('span');
-  fnameSpan.className = 'sw-fname';
-  fnameSpan.style.cssText = 'color:var(--text1);font-size:11px;margin-left:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:220px;';
-  fnameSpan.textContent = fname;
-
-  const linesSpan = document.createElement('span');
-  linesSpan.className = 'code-lines sw-lines';
-  linesSpan.style.marginLeft = '6px';
-  linesSpan.textContent = lines + ' line' + (lines !== 1 ? 's' : '');
-
-  const actionsDiv = document.createElement('div');
-  actionsDiv.className = 'code-actions';
-  actionsDiv.append(toggleBtn, viewBtn, copyBtn, dlBtn);
-
-  hdr.append(langSpan, fnameSpan, linesSpan, actionsDiv);
-  return hdr;
+function _buildSimpleOverlay(lang, code) {
+  const o = document.createElement('div'); o.className = 'code-simple-actions';
+  const b = document.createElement('span'); b.className = 'code-simple-lang'; b.textContent = langLabel(lang);
+  const c = document.createElement('button'); c.className = 'code-simple-copy'; c.textContent = 'Copy';
+  c.addEventListener('click', e => { e.stopPropagation(); _copyText(code, c); });
+  o.append(b, c); return o;
 }
 
-// ─── Build code footer (collapse button at bottom) ────────────────────────
-function _buildCodeFooter(onCollapse) {
-  const footer = document.createElement('div');
-  footer.className = 'code-footer';
-  const btn = document.createElement('button');
-  btn.className = 'code-footer-btn';
-  btn.textContent = '▴ Collapse';
-  btn.addEventListener('click', function(e) { e.stopPropagation(); onCollapse(); });
-  footer.appendChild(btn);
-  return footer;
+function _buildCodeHeader(lang, fname, lines) {
+  const h = document.createElement('div'); h.className = 'code-header';
+  const ls = document.createElement('span'); ls.className = 'code-lang'; ls.textContent = langLabel(lang); ls.dataset.lang = lang.toLowerCase();
+  const fs = document.createElement('span'); fs.className = 'sw-fname'; fs.style.cssText = 'color:var(--text1);font-size:11px;margin-left:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:220px;'; fs.textContent = fname;
+  const lc = document.createElement('span'); lc.className = 'code-lines sw-lines'; lc.style.marginLeft = '6px'; lc.textContent = lines + ' line' + (lines !== 1 ? 's' : '');
+  const a = document.createElement('div'); a.className = 'code-actions';
+  const eb = document.createElement('button'); eb.className = 'code-btn'; eb.dataset.action = 'expand'; eb.textContent = '▾ Expand';
+  const vb = document.createElement('button'); vb.className = 'code-btn'; vb.dataset.action = 'view'; vb.textContent = '⤢ View';
+  const cb = document.createElement('button'); cb.className = 'code-btn'; cb.dataset.action = 'copy'; cb.textContent = 'Copy';
+  const db = document.createElement('button'); db.className = 'code-btn'; db.dataset.action = 'download';
+  db.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
+  a.append(eb, vb, cb, db); h.append(ls, fs, lc, a); return h;
 }
 
-// ─── Build action buttons ─────────────────────────────────────────────────
-function _buildActionBtns() {
-  const toggleBtn = document.createElement('button');
-  toggleBtn.className = 'code-btn';
-  toggleBtn.textContent = '▾ Expand';
-  toggleBtn.title = 'Expand';
-
-  const viewBtn = document.createElement('button');
-  viewBtn.className = 'code-btn';
-  viewBtn.textContent = '⤢ View';
-  viewBtn.title = 'Open in side panel';
-
-  const copyBtn = document.createElement('button');
-  copyBtn.className = 'code-btn';
-  copyBtn.textContent = 'Copy';
-  copyBtn.title = 'Copy to clipboard';
-
-  const dlBtn = document.createElement('button');
-  dlBtn.className = 'code-btn';
-  dlBtn.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none"
-    stroke="currentColor" stroke-width="2.5">
-    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-    <polyline points="7 10 12 15 17 10"/>
-    <line x1="12" y1="15" x2="12" y2="3"/>
-  </svg>`;
-  dlBtn.title = 'Download';
-
-  return { toggleBtn, viewBtn, copyBtn, dlBtn };
+function _buildShowMore(totalLines, maxH) {
+  const v = _visibleLines(maxH), hid = Math.max(0, totalLines - v);
+  const el = document.createElement('div'); el.className = 'code-showmore' + (hid <= 0 ? ' hidden' : '');
+  const btn = document.createElement('button'); btn.className = 'code-showmore-btn'; btn.dataset.action = 'expand';
+  btn.textContent = hid > 0 ? `▾ Show ${hid} more line${hid !== 1 ? 's' : ''}` : '';
+  el.appendChild(btn); return el;
 }
 
-// ─── hlStreaming — wraps every <pre> during streaming ─────────────────────
+function _updateShowMore(wrap, totalLines, maxH, isExp) {
+  const sm = wrap.querySelector('.code-showmore'), btn = wrap.querySelector('.code-showmore-btn');
+  if (!sm || !btn) return;
+  const hid = Math.max(0, totalLines - _visibleLines(maxH));
+  btn.textContent = hid > 0 ? `▾ Show ${hid} more line${hid !== 1 ? 's' : ''}` : '';
+  if (isExp) sm.classList.add('hidden'); else sm.classList.toggle('hidden', hid <= 0);
+}
+
+// ─── Collapse footer: entire bar is clickable ─────────────────────────────
+function _buildCodeFooter() {
+  const f = document.createElement('div');
+  f.className = 'code-footer';
+  f.dataset.action = 'collapse'; // action on the whole bar
+  const b = document.createElement('button');
+  b.className = 'code-footer-btn';
+  b.textContent = '▴ Collapse';
+  f.appendChild(b);
+  return f;
+}
+
+function _getWrapInfo(wrap) {
+  const code = wrap.querySelector('pre code')?.textContent || '';
+  const lang = wrap.dataset.lang || 'text';
+  return { code, lang, fname: wrap.dataset.fname || langToFilename(lang), msgId: wrap.dataset.msgid || null, blockIdx: parseInt(wrap.dataset.blockidx || '0') };
+}
+
+function _setExpanded(wrap, expanded) {
+  const preWrap = wrap.querySelector('.code-pre-wrap');
+  const fade = wrap.querySelector('.stream-code-fade');
+  const footer = wrap.querySelector('.code-footer');
+  const showMore = wrap.querySelector('.code-showmore');
+  const expandBtn = wrap.querySelector('.code-btn[data-action="expand"]');
+  const msgId = wrap.dataset.msgid, idx = wrap.dataset.blockidx || '0';
+  const maxH = parseInt(wrap.dataset.maxh || '260');
+  if (!preWrap) return;
+  if (!_streamExpanded[msgId]) _streamExpanded[msgId] = {};
+  _streamExpanded[msgId][idx] = expanded;
+  if (expanded) {
+    const streaming = _isMsgStreaming(msgId);
+    preWrap.style.maxHeight = streaming ? '70vh' : 'none';
+    preWrap.style.overflow = 'auto';
+    if (fade) fade.style.display = 'none';
+    if (showMore) showMore.classList.add('hidden');
+    if (footer) footer.classList.add('visible');
+    if (expandBtn) expandBtn.textContent = '▴ Collapse';
+    requestAnimationFrame(() => { preWrap.scrollTop = preWrap.scrollHeight; });
+  } else {
+    preWrap.style.maxHeight = maxH + 'px';
+    preWrap.style.overflow = 'hidden';
+    if (fade) fade.style.display = '';
+    if (expandBtn) expandBtn.textContent = '▾ Expand';
+    if (footer) footer.classList.remove('visible');
+    const code = wrap.querySelector('pre code')?.textContent || '';
+    _updateShowMore(wrap, code.split('\n').length, maxH, false);
+  }
+}
+
+function _toggleExpand(wrap) {
+  const msgId = wrap.dataset.msgid, idx = wrap.dataset.blockidx || '0';
+  _setExpanded(wrap, !(_streamExpanded[msgId]?.[idx] || false));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EVENT DELEGATION — handles code-btn, code-footer, code-showmore
+// ═══════════════════════════════════════════════════════════════════════════
+document.addEventListener('click', function(e) {
+  // Header buttons
+  const codeBtn = e.target.closest('.code-btn[data-action]');
+  if (codeBtn) {
+    e.stopPropagation();
+    const wrap = codeBtn.closest('.stream-wrap'); if (!wrap) return;
+    const info = _getWrapInfo(wrap);
+    switch (codeBtn.dataset.action) {
+      case 'expand': _toggleExpand(wrap); break;
+      case 'view': openSidePanel(info.code, info.lang, info.fname, info.msgId ? { msgId: info.msgId, blockIdx: info.blockIdx } : null); break;
+      case 'copy': _copyText(info.code, codeBtn); break;
+      case 'download': downloadCode(info.code, info.lang, info.fname); break;
+    }
+    return;
+  }
+
+  // Collapse footer — entire bar is clickable
+  const footer = e.target.closest('.code-footer[data-action="collapse"]');
+  if (footer) {
+    e.stopPropagation();
+    const wrap = footer.closest('.stream-wrap');
+    if (wrap) _setExpanded(wrap, false);
+    return;
+  }
+
+  // Show more bar
+  const sm = e.target.closest('.code-showmore');
+  if (sm) {
+    e.stopPropagation();
+    const wrap = sm.closest('.stream-wrap');
+    if (wrap) _setExpanded(wrap, true);
+    return;
+  }
+}, true);
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// hlStreaming
+// ═══════════════════════════════════════════════════════════════════════════
 function hlStreaming(container, msgId, savedWraps) {
   if (!savedWraps) savedWraps = {};
-
   const pres = Array.from(container.querySelectorAll('pre'));
   pres.forEach((pre, idx) => {
-
     const codeEl = pre.querySelector('code');
-    const lang   = (codeEl?.className || '').replace('language-','').split(' ')[0] || 'text';
-    const code   = codeEl?.textContent || '';
+    const lang = (codeEl?.className || '').replace('language-','').split(' ')[0] || 'text';
+    const code = codeEl?.textContent || '';
+    const lines = code.split('\n').length;
+    const idxKey = String(idx);
+    const maxH = 260;
 
-    // Use stableid (not DOM index) so the wrap survives re-renders where
-    // the index shifts (e.g. when marked alternates between rendering
-    // partial fences as <pre> vs plain text during streaming).
-    const sid = _stableId(lang, code);
-
-    // ── Reuse existing wrap ──────────────────────────────────────────────
-    // Look up by stableid first, then fall back to blockidx for compat
-    const existing = savedWraps[sid] || savedWraps[String(idx)];
-    if (existing) {
-      // Re-stamp stableid in case it was previously keyed by idx
-      existing.dataset.stableid = sid;
-      existing.dataset.blockidx = String(idx);
-
-      const existCode = existing.querySelector('pre code');
-      if (existCode && code && existCode.textContent !== code) {
-        const savedClass = existCode.className;
-        existCode.textContent = code;
-        existCode.className   = savedClass;
-        _hlHighlight(existCode);
-
-        const lc = existing.querySelector('.sw-lines');
-        if (lc) {
-          const n = code.split('\n').length;
-          lc.textContent = n + ' line' + (n !== 1 ? 's' : '');
-        }
-        const fnSpan = existing.querySelector('.sw-fname');
-        if (fnSpan) {
-          // Only update fname from code comments (DOM scan would hit the
-          // wrap itself which is already in the DOM)
-          const smartName = _extractFilenameFromCode(code) || langToFilename(lang);
-          if (smartName !== fnSpan.textContent) {
-            fnSpan.textContent     = smartName;
-            existing.dataset.fname = smartName;
-          }
-        }
-      }
-      pre.replaceWith(existing);
+    if (!_shouldBeFile(code, lang, pre)) {
+      if (codeEl) _hlHighlight(codeEl);
+      pre.style.position = 'relative';
+      pre.querySelector('.code-simple-actions')?.remove();
+      pre.appendChild(_buildSimpleOverlay(lang, code));
       return;
     }
 
-    // ── Build fresh stream-wrap ──────────────────────────────────────────
-    const fname  = resolveFilename(code, lang, pre);
-    const lines  = code.split('\n').length;
-
-    if (codeEl) { _hlHighlight(codeEl); }
-
-    const wrap = document.createElement('div');
-    wrap.className        = 'stream-wrap';
-    wrap.dataset.msgid    = msgId;
-    wrap.dataset.blockidx = String(idx);
-    wrap.dataset.stableid = sid;
-    wrap.dataset.lang     = lang;
-    wrap.dataset.fname    = fname;
-
-    const { toggleBtn, viewBtn, copyBtn, dlBtn } = _buildActionBtns();
-
-    const doCollapse = () => {
-      if (!_streamExpanded[msgId]) _streamExpanded[msgId] = {};
-      _streamExpanded[msgId][sid] = false;
-      pre.style.maxHeight = '260px';
-      pre.style.overflow  = 'hidden';
-      fade.style.display  = '';
-      footer.classList.remove('visible');
-      toggleBtn.textContent = '▾ Expand';
-    };
-
-    const footer = _buildCodeFooter(doCollapse);
-    const fade   = document.createElement('div');
-    fade.className = 'stream-code-fade';
-
-    const hdr = _buildCodeHeader(lang, fname, lines, toggleBtn, viewBtn, copyBtn, dlBtn);
-    wrap.appendChild(hdr);
-
-    pre.style.maxHeight = '260px';
-    pre.style.overflow  = 'hidden';
-    pre.style.margin = pre.style.borderRadius = pre.style.border = '0';
-
-    pre.replaceWith(wrap);
-    wrap.appendChild(pre);
-    wrap.appendChild(fade);
-    wrap.appendChild(footer);
-
-    // Restore expand state if previously expanded under this stableid
-    if (_streamExpanded[msgId]?.[sid]) {
-      pre.style.maxHeight = 'none';
-      pre.style.overflow  = 'auto';
-      fade.style.display  = 'none';
-      footer.classList.add('visible');
-      toggleBtn.textContent = '▾ Expand';
-    }
-
-    toggleBtn.addEventListener('click', function(e) {
-      e.stopPropagation();
-      if (!_streamExpanded[msgId]) _streamExpanded[msgId] = {};
-      const nowExpanded = !_streamExpanded[msgId][sid];
-      _streamExpanded[msgId][sid] = nowExpanded;
-      if (nowExpanded) {
-        pre.style.maxHeight = 'none';
-        pre.style.overflow  = 'auto';
-        fade.style.display  = 'none';
-        footer.classList.add('visible');
-        toggleBtn.textContent = '▾ Expand';
-      } else {
-        doCollapse();
+    const existing = savedWraps[idxKey];
+    if (existing) {
+      existing.dataset.blockidx = idxKey; existing.dataset.msgid = msgId;
+      const savedScrollTop = existing._savedScrollTop || 0;
+      const wasAtBottom = existing._wasAtBottom !== undefined ? existing._wasAtBottom : true;
+      const existCode = existing.querySelector('pre code');
+      if (existCode && code && existCode.textContent !== code) {
+        const sc = existCode.className; existCode.textContent = code; existCode.className = sc; _hlHighlight(existCode);
+        const lc = existing.querySelector('.sw-lines');
+        if (lc) lc.textContent = lines + ' line' + (lines !== 1 ? 's' : '');
+        const fnSpan = existing.querySelector('.sw-fname');
+        if (fnSpan) { const sn = _extractFilenameFromCode(code) || fnSpan.textContent; if (sn !== fnSpan.textContent) { fnSpan.textContent = sn; existing.dataset.fname = sn; } }
+        _updateShowMore(existing, lines, maxH, _streamExpanded[msgId]?.[idxKey] || false);
       }
-    });
-
-    viewBtn.addEventListener('click', function(e) {
-      e.stopPropagation();
-      const cur = wrap.querySelector('pre code')?.textContent || '';
-      openSidePanel(cur, lang, wrap.dataset.fname || fname, { msgId, blockIdx: idx });
-    });
-
-    copyBtn.addEventListener('click', function(e) {
-      e.stopPropagation();
-      _copyText(wrap.querySelector('pre code')?.textContent || '', copyBtn);
-    });
-
-    dlBtn.addEventListener('click', function(e) {
-      e.stopPropagation();
-      downloadCode(wrap.querySelector('pre code')?.textContent || '', lang, wrap.dataset.fname || fname);
-    });
-  });
-}
-
-// ─── processCodeBlocks — finalized messages ───────────────────────────────
-function processCodeBlocks(container, fullText) {
-  const pres = Array.from(container.querySelectorAll('pre'));
-  pres.forEach((pre, idx) => {
-    if (pre.closest('.stream-wrap')) return;
-
-    const codeEl  = pre.querySelector('code');
-    const lang    = (codeEl?.className || '').replace('language-','').split(' ')[0] || 'text';
-    const code    = codeEl?.textContent || '';
-    const fname   = resolveFilename(code, lang, pre);
-    const lineArr = code.split('\n');
-    const lines   = (lineArr[lineArr.length - 1] === '') ? lineArr.length - 1 : lineArr.length;
-    const isLong  = lines > 15;
-
-    if (codeEl) { _hlHighlight(codeEl); }
-
-    const wrap = document.createElement('div');
-    wrap.className        = 'stream-wrap';
-    wrap.dataset.blockidx = String(idx);
-    wrap.dataset.stableid = _stableId(lang, code);
-    wrap.dataset.lang     = lang;
-    wrap.dataset.fname    = fname;
-
-    const { toggleBtn, viewBtn, copyBtn, dlBtn } = _buildActionBtns();
-
-    let isExpanded = !isLong;
-
-    const doCollapse = () => {
-      isExpanded = false;
-      pre.style.maxHeight = '320px';
-      pre.style.overflow  = 'hidden';
-      if (fade) fade.style.display = '';
-      footer.classList.remove('visible');
-      toggleBtn.textContent = '▾ Expand';
-    };
-
-    const footer = _buildCodeFooter(doCollapse);
-    toggleBtn.textContent = isLong ? '▾ Expand' : '▴ Collapse';
-
-    const hdr = _buildCodeHeader(lang, fname, lines, toggleBtn, viewBtn, copyBtn, dlBtn);
-    wrap.appendChild(hdr);
-
-    pre.style.margin = pre.style.borderRadius = pre.style.border = '0';
-    pre.replaceWith(wrap);
-
-    let fade = null;
-
-    if (isLong) {
-      pre.style.maxHeight = '320px';
-      pre.style.overflow  = 'hidden';
-      fade = document.createElement('div');
-      fade.className = 'stream-code-fade';
-      wrap.append(pre, fade);
-    } else {
-      footer.classList.add('visible');
-      wrap.appendChild(pre);
-    }
-
-    wrap.appendChild(footer);
-
-    toggleBtn.addEventListener('click', function() {
-      isExpanded = !isExpanded;
-      if (isExpanded) {
-        pre.style.maxHeight = 'none';
-        pre.style.overflow  = 'auto';
+      const isExp = _streamExpanded[msgId]?.[idxKey] || false;
+      const preWrap = existing.querySelector('.code-pre-wrap');
+      const fade = existing.querySelector('.stream-code-fade');
+      const ft = existing.querySelector('.code-footer');
+      const sm2 = existing.querySelector('.code-showmore');
+      const eb = existing.querySelector('.code-btn[data-action="expand"]');
+      if (isExp && preWrap) {
+        preWrap.style.maxHeight = _isMsgStreaming(msgId) ? '70vh' : 'none';
+        preWrap.style.overflow = 'auto';
         if (fade) fade.style.display = 'none';
-        footer.classList.add('visible');
-        toggleBtn.textContent = '▴ Collapse';
-      } else {
-        doCollapse();
+        if (sm2) sm2.classList.add('hidden');
+        if (ft) ft.classList.add('visible');
+        if (eb) eb.textContent = '▴ Collapse';
       }
-    });
+      pre.replaceWith(existing);
+      if (preWrap && isExp) { if (wasAtBottom) preWrap.scrollTop = preWrap.scrollHeight; else if (savedScrollTop > 0) preWrap.scrollTop = savedScrollTop; }
+      delete existing._savedScrollTop; delete existing._wasAtBottom;
+      return;
+    }
 
-    viewBtn.addEventListener('click', () => openSidePanel(code, lang, fname, null));
-    copyBtn.addEventListener('click', () => _copyText(code, copyBtn));
-    dlBtn.addEventListener('click',  () => downloadCode(code, lang, fname));
+    const fname = resolveFilename(code, lang, pre);
+    if (codeEl) _hlHighlight(codeEl);
+    const wrap = document.createElement('div');
+    wrap.className = 'stream-wrap'; wrap.dataset.msgid = msgId; wrap.dataset.blockidx = idxKey;
+    wrap.dataset.lang = lang; wrap.dataset.fname = fname; wrap.dataset.maxh = String(maxH);
+    const hdr = _buildCodeHeader(lang, fname, lines);
+    const showMore = _buildShowMore(lines, maxH);
+    const footer = _buildCodeFooter();
+    const preWrap = document.createElement('div'); preWrap.className = 'code-pre-wrap'; preWrap.style.maxHeight = maxH + 'px';
+    const fade = document.createElement('div'); fade.className = 'stream-code-fade';
+    pre.style.margin = pre.style.borderRadius = pre.style.border = '0';
+    pre.replaceWith(wrap);
+    preWrap.appendChild(pre); preWrap.appendChild(fade);
+    wrap.appendChild(hdr); wrap.appendChild(preWrap); wrap.appendChild(showMore); wrap.appendChild(footer);
+    if (_streamExpanded[msgId]?.[idxKey]) _setExpanded(wrap, true);
   });
 }
 
-// ─── buildFileList ─────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// processCodeBlocks — finalized
+// ═══════════════════════════════════════════════════════════════════════════
+function processCodeBlocks(container) {
+  Array.from(container.querySelectorAll('pre')).forEach((pre, idx) => {
+    if (pre.closest('.stream-wrap')) return;
+    const codeEl = pre.querySelector('code');
+    const lang = (codeEl?.className || '').replace('language-','').split(' ')[0] || 'text';
+    const code = codeEl?.textContent || '';
+    const la = code.split('\n'), lines = (la[la.length-1]==='') ? la.length-1 : la.length;
+    if (codeEl) _hlHighlight(codeEl);
+    if (!_shouldBeFile(code, lang, pre)) {
+      pre.style.position = 'relative'; pre.querySelector('.code-simple-actions')?.remove();
+      pre.appendChild(_buildSimpleOverlay(lang, code)); return;
+    }
+    const fname = resolveFilename(code, lang, pre), maxH = 320, isLong = lines > _visibleLines(maxH);
+    const wrap = document.createElement('div');
+    wrap.className = 'stream-wrap'; wrap.dataset.blockidx = String(idx);
+    wrap.dataset.lang = lang; wrap.dataset.fname = fname; wrap.dataset.maxh = String(maxH);
+    const hdr = _buildCodeHeader(lang, fname, lines);
+    const showMore = _buildShowMore(lines, maxH);
+    const footer = _buildCodeFooter();
+    const eb = hdr.querySelector('.code-btn[data-action="expand"]');
+    const preWrap = document.createElement('div'); preWrap.className = 'code-pre-wrap';
+    pre.style.margin = pre.style.borderRadius = pre.style.border = '0';
+    pre.replaceWith(wrap); wrap.appendChild(hdr);
+    if (isLong) {
+      preWrap.style.maxHeight = maxH + 'px';
+      const fade = document.createElement('div'); fade.className = 'stream-code-fade';
+      preWrap.appendChild(pre); preWrap.appendChild(fade);
+      wrap.appendChild(preWrap); wrap.appendChild(showMore);
+      if (eb) eb.textContent = '▾ Expand';
+    } else {
+      preWrap.appendChild(pre); wrap.appendChild(preWrap);
+      showMore.classList.add('hidden'); footer.classList.add('visible');
+      if (eb) eb.textContent = '▴ Collapse';
+    }
+    wrap.appendChild(footer);
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// buildFileList / extractArtifacts / buildArtifactCards
+// ═══════════════════════════════════════════════════════════════════════════
 function buildFileList(container) {
   const wraps = Array.from(container.querySelectorAll('.stream-wrap'));
   if (!wraps.length) return null;
-
-  const files = wraps.map((wrap) => {
-    const codeEl  = wrap.querySelector('pre code');
-    const code    = codeEl?.textContent || '';
-    const lang    = wrap.dataset.lang || 'text';
-    const fname   = wrap.dataset.fname || resolveFilename(code, lang, null);
-    const lineArr = code.split('\n');
-    const lines   = (lineArr[lineArr.length - 1] === '') ? lineArr.length - 1 : lineArr.length;
-    const bytes   = new Blob([code]).size;
-    const size    = bytes < 1024    ? bytes + ' B'
-                  : bytes < 1048576 ? (bytes / 1024).toFixed(1) + ' KB'
-                  : (bytes / 1048576).toFixed(1) + ' MB';
-    return { code, lang, fname, lines, size };
+  const files = wraps.map(w => {
+    const code = w.querySelector('pre code')?.textContent || '', lang = w.dataset.lang || 'text';
+    const fname = w.dataset.fname || resolveFilename(code, lang, null);
+    const la = code.split('\n'), lines = (la[la.length-1]==='') ? la.length-1 : la.length;
+    const bytes = new Blob([code]).size;
+    return { code, lang, fname, lines, size: bytes < 1024 ? bytes+' B' : bytes < 1048576 ? (bytes/1024).toFixed(1)+' KB' : (bytes/1048576).toFixed(1)+' MB' };
   });
-
-  const panel = document.createElement('div');
-  panel.className = 'file-list';
-
-  const header = document.createElement('div');
-  header.className = 'file-list-header';
-
-  const titleSpan = document.createElement('span');
-  titleSpan.className = 'fl-title';
-  titleSpan.innerHTML = `
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
-      stroke="currentColor" stroke-width="2">
-      <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/>
-      <polyline points="13 2 13 9 20 9"/>
-    </svg>
-    Files <span class="fl-badge">${files.length}</span>`;
-
-  const dlAllBtn = document.createElement('button');
-  dlAllBtn.className = 'fl-download-all';
-  dlAllBtn.innerHTML = `
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
-      stroke="currentColor" stroke-width="2.5">
-      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-      <polyline points="7 10 12 15 17 10"/>
-      <line x1="12" y1="15" x12="3"/>
-    </svg>
-    Download all`;
-  dlAllBtn.addEventListener('click', function(e) {
-    e.stopPropagation();
-    files.forEach((f, i) => setTimeout(() => downloadCode(f.code, f.lang, f.fname), i * 180));
-  });
-
-  header.append(titleSpan, dlAllBtn);
-  panel.appendChild(header);
-
-  const list = document.createElement('div');
-  list.className = 'file-list-items';
-
-  files.forEach((f) => {
-    const item = document.createElement('div');
-    item.className = 'fl-item';
-
-    const iconDiv = document.createElement('div');
-    iconDiv.className    = 'fl-icon';
-    iconDiv.textContent  = langLabel(f.lang);
-    iconDiv.dataset.lang = f.lang.toLowerCase();
-
-    const infoDiv = document.createElement('div');
-    infoDiv.className = 'fl-info';
-
-    const nameDiv = document.createElement('div');
-    nameDiv.className   = 'fl-name';
-    nameDiv.textContent = f.fname;
-
-    const metaDiv = document.createElement('div');
-    metaDiv.className = 'fl-meta';
-
-    const langBadge  = document.createElement('span');
-    langBadge.textContent = f.lang.toUpperCase();
-    const linesBadge = document.createElement('span');
-    linesBadge.textContent = `${f.lines} line${f.lines !== 1 ? 's' : ''}`;
-    const sizeBadge  = document.createElement('span');
-    sizeBadge.textContent = f.size;
-
-    metaDiv.append(langBadge, linesBadge, sizeBadge);
-    infoDiv.append(nameDiv, metaDiv);
-
-    const dlBtn = document.createElement('button');
-    dlBtn.className   = 'fl-download';
-    dlBtn.textContent = 'Download';
-
+  const panel = document.createElement('div'); panel.className = 'file-list';
+  const header = document.createElement('div'); header.className = 'file-list-header';
+  const ts = document.createElement('span'); ts.className = 'fl-title';
+  ts.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg> Files <span class="fl-badge">${files.length}</span>`;
+  const da = document.createElement('button'); da.className = 'fl-download-all';
+  da.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download all`;
+  da.addEventListener('click', e => { e.stopPropagation(); files.forEach((f,i) => setTimeout(() => downloadCode(f.code, f.lang, f.fname), i*180)); });
+  header.append(ts, da); panel.appendChild(header);
+  const list = document.createElement('div'); list.className = 'file-list-items';
+  files.forEach(f => {
+    const item = document.createElement('div'); item.className = 'fl-item';
+    const ic = document.createElement('div'); ic.className = 'fl-icon'; ic.textContent = langLabel(f.lang); ic.dataset.lang = f.lang.toLowerCase();
+    const inf = document.createElement('div'); inf.className = 'fl-info';
+    const nm = document.createElement('div'); nm.className = 'fl-name'; nm.textContent = f.fname;
+    const mt = document.createElement('div'); mt.className = 'fl-meta';
+    const lb = document.createElement('span'); lb.textContent = f.lang.toUpperCase();
+    const lineb = document.createElement('span'); lineb.textContent = `${f.lines} line${f.lines!==1?'s':''}`;
+    const sb = document.createElement('span'); sb.textContent = f.size;
+    mt.append(lb, lineb, sb); inf.append(nm, mt);
+    const dl = document.createElement('button'); dl.className = 'fl-download'; dl.textContent = 'Download';
     item.addEventListener('click', () => openSidePanel(f.code, f.lang, f.fname, null));
-    dlBtn.addEventListener('click', function(e) {
-      e.stopPropagation();
-      downloadCode(f.code, f.lang, f.fname);
-    });
-
-    item.append(iconDiv, infoDiv, dlBtn);
-    list.appendChild(item);
+    dl.addEventListener('click', e => { e.stopPropagation(); downloadCode(f.code, f.lang, f.fname); });
+    item.append(ic, inf, dl); list.appendChild(item);
   });
-
-  panel.appendChild(list);
-  return panel;
+  panel.appendChild(list); return panel;
 }
 
-// ─── extractArtifacts ────────────────────────────────────────────────────
 function extractArtifacts(text) {
-  const arts = [];
-  const re   = /```(\w*)\n([\s\S]*?)```/g;
-  let m;
-  while ((m = re.exec(text)) !== null) {
-    const lang = m[1] || 'text';
-    const code = m[2];
-    arts.push({ lang, code, filename: resolveFilename(code, lang, null) });
-  }
+  const arts = [], re = /```(\w*)\n([\s\S]*?)```/g; let m;
+  while ((m = re.exec(text)) !== null) { arts.push({ lang: m[1]||'text', code: m[2], filename: resolveFilename(m[2], m[1]||'text', null) }); }
   return arts;
 }
 
-// ─── buildArtifactCards ───────────────────────────────────────────────────
 function buildArtifactCards(arts) {
-  const wrap = document.createElement('div');
-  wrap.className = 'artifact-cards';
+  const wrap = document.createElement('div'); wrap.className = 'artifact-cards';
   arts.forEach(a => {
-    const card = document.createElement('div');
-    card.className = 'artifact-card';
-    card.innerHTML = `
-      <div class="artifact-card-icon">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-          stroke="currentColor" stroke-width="2">
-          <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/>
-          <polyline points="13 2 13 9 20 9"/>
-        </svg>
-      </div>
-      <div class="artifact-card-info">
-        <div class="artifact-card-name">${esc(a.filename)}</div>
-        <div class="artifact-card-meta">${esc(a.lang.toUpperCase())} · ${a.code.split('\n').length} lines</div>
-      </div>`;
+    const card = document.createElement('div'); card.className = 'artifact-card';
+    card.innerHTML = `<div class="artifact-card-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg></div><div class="artifact-card-info"><div class="artifact-card-name">${esc(a.filename)}</div><div class="artifact-card-meta">${esc(a.lang.toUpperCase())} · ${a.code.split('\n').length} lines</div></div>`;
     card.addEventListener('click', () => openSidePanel(a.code, a.lang, a.filename, null));
-    const dlBtn = document.createElement('button');
-    dlBtn.className   = 'artifact-card-download';
-    dlBtn.textContent = 'Download';
-    dlBtn.addEventListener('click', e => {
-      e.stopPropagation();
-      downloadCode(a.code, a.lang, a.filename);
-    });
-    card.appendChild(dlBtn);
-    wrap.appendChild(card);
+    const dl = document.createElement('button'); dl.className = 'artifact-card-download'; dl.textContent = 'Download';
+    dl.addEventListener('click', e => { e.stopPropagation(); downloadCode(a.code, a.lang, a.filename); });
+    card.appendChild(dl); wrap.appendChild(card);
   });
   return wrap;
 }
