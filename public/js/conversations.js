@@ -11,10 +11,8 @@ function bumpConvoToTop(id) {
 }
 
 function newChat() {
-  // Don't create duplicate empty chats — find ANY existing empty chat
   const emptyConvo = conversations.find(c => c.messages.length === 0);
   if (emptyConvo) {
-    // Already have an empty chat — switch to it
     if (currentConvoId === emptyConvo.id) {
       if (isMobile() && !sidebarHidden) toggleSidebar();
       document.getElementById('msgInput')?.focus();
@@ -23,7 +21,6 @@ function newChat() {
     loadConvo(emptyConvo.id);
     return;
   }
-
   const id = Date.now().toString();
   conversations.unshift({ id, title: 'New Conversation', messages: [], createdAt: Date.now() });
   saveConvos();
@@ -36,6 +33,7 @@ function loadConvo(id) {
   userScrolledUp = false;
   _setScrollBtnVisible(false);
   if (unreadCounts[id]) { delete unreadCounts[id]; saveUnread(); }
+
   const convo = getConvo(id);
   if (!convo) return;
 
@@ -44,6 +42,8 @@ function loadConvo(id) {
   renderChatList();
 
   const ctx = streamRegistry.get(id);
+
+  // renderMessages handles scroll internally (DocumentFragment → append → scroll)
   renderMessages(convo.messages, ctx?.assistantMsgId);
 
   const isStreaming = streamRegistry.has(id);
@@ -51,40 +51,28 @@ function loadConvo(id) {
 
   if (isStreaming && ctx) {
     const aMsg = convo.messages.find(m => m.id === ctx.assistantMsgId);
-    if (aMsg && aMsg.text) {
-      setTimeout(() => _flushRender(aMsg.id, aMsg), 50);
+    if (aMsg) {
+      // Give DOM time to paint, then flush streaming state
+      requestAnimationFrame(() => {
+        if (aMsg.text) _flushRender(aMsg.id, aMsg);
+      });
     }
   }
 
   closeSidePanel();
-  scrollBottom();
 }
 
 function deleteChat(id) {
-  // Can't delete a streaming chat
-  if (streamRegistry.has(id)) {
-    toast('Stop the current response first', 'error');
-    return;
-  }
-
+  if (streamRegistry.has(id)) { toast('Stop the current response first', 'error'); return; }
   const idx = conversations.findIndex(c => c.id === id);
   if (idx === -1) return;
-
   conversations.splice(idx, 1);
   delete unreadCounts[id];
-  saveConvos();
-  saveUnread();
-
-  // If we deleted the current chat, switch to another
+  saveConvos(); saveUnread();
   if (currentConvoId === id) {
-    if (conversations.length > 0) {
-      loadConvo(conversations[0].id);
-    } else {
-      newChat();
-    }
-  } else {
-    renderChatList();
-  }
+    if (conversations.length > 0) loadConvo(conversations[0].id);
+    else newChat();
+  } else { renderChatList(); }
 }
 
 function clearAll() {
@@ -130,42 +118,28 @@ function renderChatList() {
   el.innerHTML = '';
   conversations.forEach(c => {
     const isStream = streamRegistry.has(c.id);
-    const unread = unreadCounts[c.id] || 0;
-    const item = document.createElement('div');
+    const unread   = unreadCounts[c.id] || 0;
+    const item     = document.createElement('div');
     item.className = 'chat-item' + (c.id === currentConvoId ? ' active' : '');
 
-    const dot = document.createElement('div');
-    dot.className = 'chat-item-dot';
-
-    const label = document.createElement('span');
-    label.className = 'chat-item-label';
-    label.textContent = c.title;
-
-    item.appendChild(dot);
-    item.appendChild(label);
+    const dot = document.createElement('div'); dot.className = 'chat-item-dot';
+    const lbl = document.createElement('span'); lbl.className = 'chat-item-label'; lbl.textContent = c.title;
+    item.appendChild(dot); item.appendChild(lbl);
 
     if (isStream) {
-      const streaming = document.createElement('div');
-      streaming.className = 'chat-item-streaming';
-      streaming.innerHTML = '<span></span><span></span><span></span>';
-      item.appendChild(streaming);
+      const s = document.createElement('div'); s.className = 'chat-item-streaming';
+      s.innerHTML = '<span></span><span></span><span></span>';
+      item.appendChild(s);
     } else if (unread > 0) {
-      const badge = document.createElement('div');
-      badge.className = 'unread-badge';
-      badge.textContent = unread > 9 ? '9+' : unread;
-      item.appendChild(badge);
+      const b = document.createElement('div'); b.className = 'unread-badge';
+      b.textContent = unread > 9 ? '9+' : unread;
+      item.appendChild(b);
     }
 
-    // Delete button
-    const delBtn = document.createElement('button');
-    delBtn.className = 'chat-item-delete';
-    delBtn.innerHTML = '×';
-    delBtn.title = 'Delete chat';
-    delBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      deleteChat(c.id);
-    });
-    item.appendChild(delBtn);
+    const del = document.createElement('button');
+    del.className = 'chat-item-delete'; del.innerHTML = '×'; del.title = 'Delete chat';
+    del.addEventListener('click', e => { e.stopPropagation(); deleteChat(c.id); });
+    item.appendChild(del);
 
     item.onclick = () => loadConvo(c.id);
     item.ondblclick = e => { e.stopPropagation(); startRename(c.id, item); };

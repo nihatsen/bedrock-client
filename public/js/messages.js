@@ -1,86 +1,87 @@
 // public/js/messages.js — FULL REPLACEMENT
-// Markdown render cache + batch rendering for fast chat switching
 
-// ─── Markdown render cache ─────────────────────────────────────────────────
-// Key: msgId, Value: rendered HTML string
-// Avoids re-running marked.parse() on every chat switch
+// ─── Markdown cache ────────────────────────────────────────────────────────
 const _mdCache = new Map();
-const _MD_CACHE_MAX = 500; // max entries before LRU trim
+const _MD_CACHE_MAX = 400;
 
-function _cachedRenderMd(msgId, text) {
+function _cachedRenderMd(key, text) {
   if (!text) return '';
-  const cached = _mdCache.get(msgId);
-  if (cached !== undefined) return cached;
+  const c = _mdCache.get(key);
+  if (c !== undefined) return c;
   const html = renderMd(text);
-  _mdCache.set(msgId, html);
-  // Trim cache if too large
-  if (_mdCache.size > _MD_CACHE_MAX) {
-    const firstKey = _mdCache.keys().next().value;
-    _mdCache.delete(firstKey);
-  }
+  _mdCache.set(key, html);
+  if (_mdCache.size > _MD_CACHE_MAX)
+    _mdCache.delete(_mdCache.keys().next().value);
   return html;
 }
 
-function invalidateMdCache(msgId) { _mdCache.delete(msgId); }
+function invalidateMdCache(msgId) {
+  _mdCache.delete(msgId);
+  _mdCache.delete(msgId + '_stream');
+}
 function clearMdCache() { _mdCache.clear(); }
 
-// ─── renderMessages: batch-render for large chats ─────────────────────────
+// ─── renderMessages ────────────────────────────────────────────────────────
+// Builds all rows off-DOM in a DocumentFragment → single append → scroll.
+// No batching, no race conditions, no mid-render scroll jumps.
 function renderMessages(messages, activeStreamId = null) {
-  const wrap = document.getElementById('messagesWrap');
+  const wrap  = document.getElementById('messagesWrap');
+  const empty = document.getElementById('emptyState');
 
-  // Remove old message rows but keep emptyState
+  // Remove existing rows
   wrap.querySelectorAll('.msg-row').forEach(r => r.remove());
 
-  const empty = document.getElementById('emptyState');
-  if (!messages.length) { empty.style.display = ''; return; }
+  if (!messages.length) {
+    empty.style.display = '';
+    return;
+  }
   empty.style.display = 'none';
 
-  if (messages.length <= 20) {
-    // Small chat: render synchronously
-    messages.forEach(m => appendMsgEl(m, m.id === activeStreamId));
-  } else {
-    // Large chat: render first 20 immediately, rest in idle batches
-    const FIRST_BATCH = 20;
-    const BATCH_SIZE  = 15;
+  // Build everything off-DOM
+  const frag = document.createDocumentFragment();
+  messages.forEach(m => frag.appendChild(appendMsgEl(m, m.id === activeStreamId, true)));
 
-    for (let i = 0; i < FIRST_BATCH && i < messages.length; i++) {
-      appendMsgEl(messages[i], messages[i].id === activeStreamId);
-    }
+  // Single DOM write
+  wrap.appendChild(frag);
 
-    if (messages.length > FIRST_BATCH) {
-      _batchRender(messages, FIRST_BATCH, BATCH_SIZE, activeStreamId, wrap);
-    }
-  }
+  // Process code blocks for finalized assistant messages (deferred, non-blocking)
+  requestAnimationFrame(() => {
+    wrap.querySelectorAll('.msg-row.assistant:not(.streaming)').forEach(row => {
+      const textEl = row.querySelector('.msg-text');
+      const msgId  = row.dataset.msgId;
+      if (textEl && msgId) {
+        const msg = _findMsg(msgId);
+        if (msg && !msg._error) processCodeBlocks(textEl, msg.text);
+      }
+    });
+    // File lists
+    wrap.querySelectorAll('.msg-row.assistant:not(.streaming)').forEach(row => {
+      const body = row.querySelector('.msg-body');
+      if (body && !row.querySelector('.file-list')) {
+        const fl = buildFileList(body);
+        if (fl) row.appendChild(fl);
+      }
+    });
+  });
+
+  // Scroll to bottom after DOM write
+  requestAnimationFrame(() => {
+    wrap.scrollTop = wrap.scrollHeight;
+    userScrolledUp = false;
+    _setScrollBtnVisible(false);
+  });
 }
 
-function _batchRender(messages, startIdx, batchSize, activeStreamId, wrap) {
-  if (startIdx >= messages.length) return;
-
-  const idle = window.requestIdleCallback || (fn => setTimeout(fn, 1));
-
-  idle(deadline => {
-    let i = startIdx;
-    // Process as many as time allows (or one batch if no deadline API)
-    while (i < messages.length) {
-      const timeLeft = deadline.timeRemaining ? deadline.timeRemaining() : 5;
-      if (timeLeft < 1 && i > startIdx) break; // yield back
-
-      appendMsgEl(messages[i], messages[i].id === activeStreamId);
-      i++;
-
-      if (i - startIdx >= batchSize) break;
-    }
-
-    if (i < messages.length) {
-      _batchRender(messages, i, batchSize, activeStreamId, wrap);
-    }
-  }, { timeout: 100 });
+function _findMsg(msgId) {
+  if (!currentConvoId) return null;
+  const convo = typeof getConvo === 'function' ? getConvo(currentConvoId) : null;
+  return convo?.messages.find(m => m.id === msgId) || null;
 }
 
-function appendMsgEl(msg, isStreaming = false) {
-  const wrap = document.getElementById('messagesWrap');
-  document.getElementById('emptyState').style.display = 'none';
-
+// ─── appendMsgEl ──────────────────────────────────────────────────────────
+// When appendToDOM=false (default), appends to #messagesWrap.
+// When appendToDOM=true, just returns the element (for fragment building).
+function appendMsgEl(msg, isStreaming = false, returnOnly = false) {
   const row = document.createElement('div');
   row.className = `msg-row ${msg.role}${isStreaming ? ' streaming' : ''}`;
   row.dataset.msgId = msg.id;
@@ -88,6 +89,7 @@ function appendMsgEl(msg, isStreaming = false) {
   const modelLabel = msg.role === 'assistant'
     ? (msg.modelName || currentModelName || 'Assistant') : null;
 
+  // Header
   const header = document.createElement('div');
   header.className = 'msg-header';
   header.innerHTML = `
@@ -115,23 +117,21 @@ function appendMsgEl(msg, isStreaming = false) {
     db.onclick = () => deleteMessagePair(msg.id);
     actions.appendChild(db);
   }
-
   if (msg.role === 'assistant') {
     const rb = document.createElement('button');
     rb.className = 'msg-action-btn'; rb.textContent = '↺ Retry';
     rb.onclick = () => retryMessage(msg.id);
     actions.appendChild(rb);
   }
-
   header.appendChild(actions);
 
+  // Body
   const body = document.createElement('div');
   body.className = 'msg-body';
 
-  // File chips + inline images
+  // Files
   if (msg.files?.length) {
-    const chips = document.createElement('div');
-    chips.className = 'file-chips';
+    const chips = document.createElement('div'); chips.className = 'file-chips';
     msg.files.forEach(f => {
       if (f.type === 'image') {
         const img = document.createElement('img');
@@ -140,14 +140,14 @@ function appendMsgEl(msg, isStreaming = false) {
         img.onclick = () => openImgViewer(img.src);
         body.appendChild(img);
       }
-      const chip = document.createElement('div');
-      chip.className = 'file-chip';
+      const chip = document.createElement('div'); chip.className = 'file-chip';
       chip.innerHTML = `<span class="file-chip-name">${esc(f.name)}</span><span class="file-chip-size">${fmtSize(f.size)}</span>`;
       chips.appendChild(chip);
     });
     body.appendChild(chips);
   }
 
+  // Text
   const textEl = document.createElement('div');
   textEl.className = 'msg-text';
 
@@ -156,24 +156,28 @@ function appendMsgEl(msg, isStreaming = false) {
   } else if (msg.role === 'assistant') {
     if (isStreaming) {
       if (msg.text) {
-        // Use cache for streaming too (partial render is fine)
         textEl.innerHTML = _cachedRenderMd(msg.id + '_stream', msg.text);
         hlStreaming(textEl, msg.id, {});
       }
-      const indicator = document.createElement('div');
-      indicator.className = 'stream-indicator';
-      indicator.innerHTML = '<span class="stream-spinner-sm"></span><span class="stream-cursor"></span>';
-      textEl.appendChild(indicator);
+      const ind = document.createElement('div');
+      ind.className = 'stream-indicator';
+      ind.innerHTML = '<span class="stream-spinner-sm"></span><span class="stream-cursor"></span>';
+      textEl.appendChild(ind);
     } else {
-      // Use cache — avoids re-running marked.parse on chat switch
+      // Use cached markdown — no re-processing on every chat switch
       textEl.innerHTML = _cachedRenderMd(msg.id, msg.text || '');
-      requestAnimationFrame(() => processCodeBlocks(textEl, msg.text));
+      // Code blocks processed in batch after all rows appended (see renderMessages)
+      // but for single-message appends (new messages), process immediately
+      if (!returnOnly) {
+        requestAnimationFrame(() => processCodeBlocks(textEl, msg.text));
+      }
     }
   } else {
     textEl.innerHTML = esc(msg.text || '').replace(/\n/g, '<br>');
   }
   body.appendChild(textEl);
 
+  // Stop badge
   if (msg.stopReason && !isStreaming) {
     const sb = document.createElement('div');
     sb.className = `stop-badge ${msg.stopReason}`;
@@ -181,37 +185,51 @@ function appendMsgEl(msg, isStreaming = false) {
     body.appendChild(sb);
   }
 
-  if (msg.thinking != null)
+  // Thinking block
+  if (msg.thinking != null) {
     body.appendChild(buildThinkingBlock(msg.thinking, isStreaming, msg._thinkingBudget));
+  }
 
   row.appendChild(header);
   row.appendChild(body);
-  wrap.appendChild(row);
 
-  if (msg.role === 'assistant' && !isStreaming && !msg._error && msg.text) {
-    requestAnimationFrame(() => {
-      const fl = buildFileList(body);
-      if (fl) row.appendChild(fl);
-    });
+  if (!returnOnly) {
+    const wrap  = document.getElementById('messagesWrap');
+    document.getElementById('emptyState').style.display = 'none';
+    wrap.appendChild(row);
+    // Immediate code block processing for individually appended messages
+    if (msg.role === 'assistant' && !isStreaming && !msg._error) {
+      requestAnimationFrame(() => {
+        processCodeBlocks(textEl, msg.text);
+        const fl = buildFileList(body);
+        if (fl) row.appendChild(fl);
+      });
+    }
   }
 
   return row;
 }
 
+// ─── finalizeMsgEl ─────────────────────────────────────────────────────────
 function finalizeMsgEl(msg) {
   const row = document.querySelector(`[data-msg-id="${msg.id}"]`);
-  if (!row) return;
+  if (!row) {
+    // Row not in DOM yet — invalidate partial cache so next render gets full content
+    invalidateMdCache(msg.id);
+    return;
+  }
+
+  // Remove ALL streaming artifacts reliably
   row.classList.remove('streaming');
+  row.querySelectorAll('.stream-indicator, .stream-cursor, .stream-spinner-sm').forEach(el => el.remove());
 
   const body   = row.querySelector('.msg-body');
   const textEl = row.querySelector('.msg-text');
   if (!textEl) return;
 
+  // Remove stream indicator from textEl specifically
   textEl.querySelector('.stream-indicator')?.remove();
-  textEl.querySelector('.stream-cursor')?.remove();
-  textEl.querySelector('.stream-spinner-sm')?.remove();
 
-  // Invalidate the streaming partial cache entry
   _mdCache.delete(msg.id + '_stream');
 
   if (msg._error) {
@@ -220,7 +238,7 @@ function finalizeMsgEl(msg) {
     return;
   }
 
-  // Cache final rendered markdown
+  // Render and cache final markdown
   const html = renderMd(msg.text || '');
   _mdCache.set(msg.id, html);
   textEl.innerHTML = html;
@@ -228,6 +246,7 @@ function finalizeMsgEl(msg) {
 
   const thinkingEl = body.querySelector('.thinking-block');
 
+  // Stop badge
   if (msg.stopReason) {
     body.querySelector('.stop-badge')?.remove();
     const sb = document.createElement('div');
@@ -237,19 +256,22 @@ function finalizeMsgEl(msg) {
     else body.appendChild(sb);
   }
 
+  // Finalize thinking block
   if (msg.thinking) {
     const tb = body.querySelector('.thinking-block');
     if (tb) {
-      tb.querySelector('.thinking-cursor')?.remove();
-      tb.querySelector('.thinking-progress')?.remove();
-      const ic = tb.querySelector('.thinking-spinner');
-      if (ic) ic.className = 'thinking-dot';
+      tb.querySelectorAll('.thinking-cursor, .thinking-progress').forEach(el => el.remove());
+      const ic = tb.querySelector('.thinking-spinner'); if (ic) ic.className = 'thinking-dot';
       const sl = tb.querySelector('.thinking-header-text');
-      if (sl) { const est = Math.round(msg.thinking.length / 4); sl.textContent = `REASONING — ${tokStr(est)} est. tokens`; }
+      if (sl) {
+        const est = Math.round(msg.thinking.length / 4);
+        sl.textContent = `REASONING — ${tokStr(est)} est. tokens`;
+      }
       if (!tb.classList.contains('collapsed')) tb.classList.add('collapsed');
     }
   }
 
+  // File list
   row.querySelector('.file-list')?.remove();
   requestAnimationFrame(() => {
     const fl = buildFileList(body);
@@ -257,6 +279,7 @@ function finalizeMsgEl(msg) {
   });
 }
 
+// ─── buildErrorHTML ────────────────────────────────────────────────────────
 function buildErrorHTML(err, msgId) {
   const c = document.createElement('div'); c.className = 'msg-error';
   const e = document.createElement('div'); e.className = 'err-text'; e.textContent = '⚠ ' + err;
@@ -273,6 +296,7 @@ document.addEventListener('click', function(e) {
   retryMessage(btn.dataset.retryMsgId);
 });
 
+// ─── Edit / Delete / Retry ─────────────────────────────────────────────────
 function editMessage(msgId) {
   if (streamRegistry.has(currentConvoId)) { toast('Stop current response first', 'error'); return; }
   const convo = getConvo(currentConvoId);
@@ -294,9 +318,10 @@ function editMessage(msgId) {
     const t = ta.value.trim();
     if (!t) { toast('Cannot be empty', 'error'); return; }
     msg.text = t;
-    invalidateMdCache(msgId); // invalidate cache for edited message
+    invalidateMdCache(msgId);
     convo.messages.splice(convo.messages.indexOf(msg) + 1);
-    saveConvos(); renderMessages(convo.messages);
+    saveConvos();
+    renderMessages(convo.messages);
     runStream(currentConvoId);
   };
 
@@ -322,14 +347,11 @@ function deleteMessagePair(userMsgId) {
   if (!convo || streamRegistry.has(currentConvoId)) { toast('Stop current response first', 'error'); return; }
   const idx = convo.messages.findIndex(m => m.id === userMsgId);
   if (idx === -1) return;
-  const w = document.getElementById('messagesWrap');
-  const saved = w.scrollTop;
   const count = convo.messages[idx + 1]?.role === 'assistant' ? 2 : 1;
-  // Invalidate caches
   convo.messages.slice(idx, idx + count).forEach(m => invalidateMdCache(m.id));
   convo.messages.splice(idx, count);
-  saveConvos(); renderMessages(convo.messages);
-  requestAnimationFrame(() => { w.scrollTop = saved; });
+  saveConvos();
+  renderMessages(convo.messages);
 }
 
 function retryMessage(aId) {
@@ -337,10 +359,10 @@ function retryMessage(aId) {
   if (!convo || streamRegistry.has(currentConvoId)) { toast('Stop current response first', 'error'); return; }
   const idx = convo.messages.findIndex(m => m.id === aId);
   if (idx === -1) return;
-  // Invalidate caches for removed messages
   convo.messages.slice(idx).forEach(m => invalidateMdCache(m.id));
   convo.messages.splice(idx);
-  saveConvos(); renderMessages(convo.messages);
+  saveConvos();
+  renderMessages(convo.messages);
   const last = convo.messages[convo.messages.length - 1];
   if (!last || last.role !== 'user') { toast('Nothing to retry', 'error'); return; }
   runStream(currentConvoId);

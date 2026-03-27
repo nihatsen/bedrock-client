@@ -1,5 +1,4 @@
 // public/js/sidepanel.js — FULL REPLACEMENT
-// Worker does highlight + line-split. Main thread only does virtual DOM writes.
 
 const _langBadgeColours = {
   js:'#f7df1e',javascript:'#f7df1e',ts:'#3178c6',typescript:'#3178c6',
@@ -15,7 +14,7 @@ let _wrapOn            = true;
 let _liveUpdateTimer   = null;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// WORKER — highlight + split lines entirely off main thread
+// WORKER — highlight + split lines off main thread
 // ═══════════════════════════════════════════════════════════════════════════
 
 const _WORKER_SRC = `
@@ -35,7 +34,9 @@ function splitHtmlLines(html) {
     } else if (html[i] === '\\n') {
       const cl = openTags.slice().reverse()
         .map(t => '</' + (t.match(/^<([a-zA-Z][a-zA-Z0-9]*)/)?.[1]||'span') + '>').join('');
-      lines.push(line + cl); line = openTags.join(''); i++;
+      lines.push(line + cl);
+      line = openTags.join('');
+      i++;
     } else { line += html[i++]; }
   }
   if (line) lines.push(line);
@@ -55,15 +56,13 @@ onmessage = function(e) {
     try { html = self.hljs.highlightAuto(code).value; }
     catch(__) { html = code.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
   }
-  const lines = splitHtmlLines(html);
-  postMessage({ lines, reqId });
+  postMessage({ lines: splitHtmlLines(html), reqId });
 };`;
 
 let _worker      = null;
-let _workerReady = false;
 let _reqCounter  = 0;
-const _pending   = new Map(); // reqId → { resolve, reject }
-let _latestReqId = -1;        // only apply result from latest request
+let _latestReqId = -1;
+const _pending   = new Map();
 
 function _getWorker() {
   if (_worker) return _worker;
@@ -73,44 +72,39 @@ function _getWorker() {
     const { lines, reqId } = e.data;
     const p = _pending.get(reqId);
     _pending.delete(reqId);
-    // Only resolve if this is the latest request (discard stale)
     if (p && reqId === _latestReqId) p.resolve(lines);
     else if (p) p.reject(new Error('stale'));
   };
   _worker.onerror = () => {
     _pending.forEach(p => p.reject(new Error('worker error')));
     _pending.clear();
-    _worker = null; _workerReady = false;
+    _worker = null;
   };
-  _workerReady = true;
   return _worker;
 }
 
-// Fallback sync split+highlight
 function _syncHighlightAndSplit(code, lang) {
   const tmp = document.createElement('code');
   tmp.className = lang ? `language-${lang}` : 'language-plaintext';
   tmp.textContent = code;
   try { hljs.highlightElement(tmp); } catch(e) {}
   const html = tmp.innerHTML;
-
   const lines = []; let line = '', openTags = [], i = 0;
   while (i < html.length) {
     if (html[i] === '<') {
       const end = html.indexOf('>', i);
       if (end === -1) { line += html[i++]; continue; }
-      const tag = html.slice(i, end + 1), isClose = tag.startsWith('</');
+      const tag = html.slice(i, end+1), isClose = tag.startsWith('</');
       if (!isClose) { if (!tag.endsWith('/>')) openTags.push(tag); line += tag; }
       else { openTags.pop(); line += tag; }
-      i = end + 1;
+      i = end+1;
     } else if (html[i] === '\n') {
-      const cl = openTags.slice().reverse()
-        .map(t => '</' + (t.match(/^<([a-zA-Z][a-zA-Z0-9]*)/)?.[1]||'span') + '>').join('');
-      lines.push(line + cl); line = openTags.join(''); i++;
+      const cl = openTags.slice().reverse().map(t => '</' + (t.match(/^<([a-zA-Z][a-zA-Z0-9]*)/)?.[1]||'span') + '>').join('');
+      lines.push(line+cl); line = openTags.join(''); i++;
     } else { line += html[i++]; }
   }
   if (line) lines.push(line);
-  if (lines.length && lines[lines.length-1] === '') lines.pop();
+  if (lines.length && lines[lines.length-1]==='') lines.pop();
   return lines;
 }
 
@@ -118,15 +112,10 @@ function _processAsync(code, lang) {
   return new Promise((resolve, reject) => {
     const reqId = ++_reqCounter;
     _latestReqId = reqId;
-    // Cancel all older pending requests (they're stale)
     _pending.forEach((p, id) => { if (id < reqId) { p.reject(new Error('stale')); _pending.delete(id); } });
     _pending.set(reqId, { resolve, reject });
-    try {
-      _getWorker().postMessage({ code, lang, reqId });
-    } catch(e) {
-      _pending.delete(reqId);
-      reject(e);
-    }
+    try { _getWorker().postMessage({ code, lang, reqId }); }
+    catch(e) { _pending.delete(reqId); reject(e); }
   });
 }
 
@@ -152,7 +141,6 @@ function _fastHash(s) {
   return h + '_' + s.length;
 }
 
-// Only write to DOM when visible range actually changes
 function _vsRenderWindow() {
   if (_vsSuspended) return;
   const body = document.getElementById('sidePanelBody');
@@ -173,22 +161,14 @@ function _vsRenderWindow() {
   const topH    = (VS_PAD + first * VS_ROW_H).toFixed(1);
   const bottomH = Math.max(0, (total - 1 - last) * VS_ROW_H + VS_PAD).toFixed(1);
 
-  // Build HTML with pre-allocated array
-  const count  = last - first + 1;
-  const parts  = new Array(count + 4);
-  let   pi     = 0;
-
-  parts[pi++] = '<table class="sp-code-table"><tbody>';
-  if (+topH > 0) parts[pi++] = `<tr class="sp-spacer"><td colspan="2" style="height:${topH}px"></td></tr>`;
-
+  const parts = ['<table class="sp-code-table"><tbody>'];
+  if (+topH > 0) parts.push(`<tr class="sp-spacer"><td colspan="2" style="height:${topH}px"></td></tr>`);
   for (let i = first; i <= last; i++) {
-    parts[pi++] = `<tr class="sp-line"><td class="sp-line-num">${i + 1}</td><td class="sp-line-code">${_vsLines[i] || '\u200B'}</td></tr>`;
+    parts.push(`<tr class="sp-line"><td class="sp-line-num">${i+1}</td><td class="sp-line-code">${_vsLines[i]||'\u200B'}</td></tr>`);
   }
-
-  if (+bottomH > 0) parts[pi++] = `<tr class="sp-spacer"><td colspan="2" style="height:${bottomH}px"></td></tr>`;
-  parts[pi++] = '</tbody></table>';
-
-  wrap.innerHTML = parts.slice(0, pi).join('');
+  if (+bottomH > 0) parts.push(`<tr class="sp-spacer"><td colspan="2" style="height:${bottomH}px"></td></tr>`);
+  parts.push('</tbody></table>');
+  wrap.innerHTML = parts.join('');
 }
 
 function _vsScheduleRender() {
@@ -200,14 +180,18 @@ function _vsCancelRender() {
   if (_vsRafId) { cancelAnimationFrame(_vsRafId); _vsRafId = 0; }
 }
 
-function _vsSuspendRendering() { _vsSuspended = true; _vsCancelRender(); }
+function _vsSuspendRendering() {
+  _vsSuspended = true;
+  _vsCancelRender();
+}
+
 function _vsResumeRendering() {
   _vsSuspended = false;
-  _vsLastFirst = -1; _vsLastLast = -1;
+  _vsLastFirst = -1;
+  _vsLastLast  = -1;
   _vsScheduleRender();
 }
 
-// ─── Render entry: async worker path with sync fallback ────────────────────
 async function _renderSidePanelCode(code, lang) {
   const body = document.getElementById('sidePanelBody');
   if (!body) return;
@@ -220,20 +204,18 @@ async function _renderSidePanelCode(code, lang) {
   const savedLeft   = body.scrollLeft;
   const wasAtBottom = (body.scrollHeight - body.scrollTop - body.clientHeight) < 20;
 
-  // Set container height immediately (gives correct scrollbar before highlight)
-  const rawLineCount = code.split('\n').length;
+  const rawLineCount = (code.match(/\n/g) || []).length + 1;
   const wrap = document.getElementById('spCodeWrap');
   if (wrap) wrap.style.height = (VS_PAD + rawLineCount * VS_ROW_H + VS_PAD).toFixed(1) + 'px';
 
   let lines;
   try {
     lines = await _processAsync(code, lang);
-  } catch (e) {
-    if (e.message === 'stale') return; // newer request in flight
+  } catch(e) {
+    if (e.message === 'stale') return;
     lines = _syncHighlightAndSplit(code, lang);
   }
 
-  // Another request may have started while we awaited — check hash
   if (hash !== _vsHash) return;
 
   _vsLines     = lines;
@@ -245,17 +227,13 @@ async function _renderSidePanelCode(code, lang) {
   _vsRenderWindow();
 
   if (wasAtBottom) {
-    requestAnimationFrame(() => {
-      body.scrollTop = body.scrollHeight;
-      _vsScheduleRender();
-    });
+    requestAnimationFrame(() => { body.scrollTop = body.scrollHeight; _vsScheduleRender(); });
   } else {
     body.scrollTop  = savedTop;
     body.scrollLeft = savedLeft;
   }
 }
 
-// ─── Wrap state ────────────────────────────────────────────────────────────
 function _applyWrapState() {
   const body = document.getElementById('sidePanelBody');
   const btn  = document.getElementById('spWrapBtn');
@@ -273,20 +251,18 @@ function _initVirtualScroll() {
   if (body) body.addEventListener('scroll', _vsScheduleRender, { passive: true });
 }
 
-// ─── Open ──────────────────────────────────────────────────────────────────
 function openSidePanel(code, lang, filename, streamInfo) {
   _liveSidePanelInfo = streamInfo || null;
   spCode = code; spLang = lang || 'text'; spFilename = filename || langToFilename(lang);
 
   document.getElementById('sidePanelTitle').textContent = spFilename;
-
   const langEl = document.getElementById('sidePanelLang');
   langEl.textContent = spLang.toUpperCase();
   const colour = _langBadgeColours[spLang.toLowerCase()];
   if (colour) {
-    langEl.style.color      = colour;
+    langEl.style.color = colour;
     langEl.style.background = colour + '1a';
-    langEl.style.border     = '1px solid ' + colour + '48';
+    langEl.style.border = '1px solid ' + colour + '48';
   } else { langEl.style.color = langEl.style.background = langEl.style.border = ''; }
 
   const cpBtn = document.getElementById('spCopyBtn');
@@ -294,9 +270,9 @@ function openSidePanel(code, lang, filename, streamInfo) {
 
   _applyWrapState();
   _initVirtualScroll();
-  _getWorker(); // warm up
+  _getWorker();
 
-  _vsHash = ''; // force fresh render
+  _vsHash = '';
   _renderSidePanelCode(code, spLang);
 
   const panel = document.getElementById('sidePanel');
@@ -309,7 +285,6 @@ function openSidePanel(code, lang, filename, streamInfo) {
   });
 }
 
-// ─── Live update ───────────────────────────────────────────────────────────
 function updateLiveSidePanel(container, msgId) {
   if (!_liveSidePanelInfo || _liveSidePanelInfo.msgId !== msgId) return;
   if (!document.getElementById('sidePanel').classList.contains('open')) {
@@ -335,7 +310,6 @@ function clearLiveSidePanelFor(msgId) {
   if (_liveUpdateTimer) { clearTimeout(_liveUpdateTimer); _liveUpdateTimer = null; }
 }
 
-// ─── Close ─────────────────────────────────────────────────────────────────
 function closeSidePanel() {
   const panel = document.getElementById('sidePanel');
   panel.classList.remove('open'); panel.style.width = '';
@@ -358,7 +332,7 @@ function toggleSidePanelWrap() {
   _vsLastFirst = -1; _vsLastLast = -1; _vsScheduleRender();
 }
 
-// ─── Resize ────────────────────────────────────────────────────────────────
+// ─── Resize — hide content during drag, zero reflow ─────────────────────────
 function _initSidePanelResize() {
   const panel  = document.getElementById('sidePanel');
   const handle = document.getElementById('spResizeHandle');
@@ -369,38 +343,93 @@ function _initSidePanelResize() {
   const maxW  = () => Math.min(Math.floor(window.innerWidth * 0.75), window.innerWidth - 400);
   const isMob = () => window.innerWidth <= 768;
 
-  handle.addEventListener('mousedown', e => {
-    if (isMob()) return; e.preventDefault();
-    dragging = true; startX = e.clientX; startW = panel.offsetWidth;
-    handle.classList.add('dragging'); panel.classList.add('no-transition');
-    document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none';
+  // Overlay div placed over panel content during drag — prevents all layout hits
+  let _dragOverlay = null;
+
+  function _startDrag(clientX) {
+    startX = clientX;
+    startW = panel.offsetWidth;
+    dragging = true;
+
+    panel.classList.add('no-transition');
+    document.body.style.cursor     = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    // Suspend virtual render
     _vsSuspendRendering();
-  });
-  document.addEventListener('mousemove', e => {
+
+    // Create transparent overlay that covers the panel body
+    // This prevents any mouse events reaching content (stops hover reflows)
+    // and also prevents the browser from repainting text during drag
+    if (!_dragOverlay) {
+      _dragOverlay = document.createElement('div');
+      _dragOverlay.style.cssText =
+        'position:absolute;inset:0;z-index:999;cursor:col-resize;background:transparent;';
+    }
+    const body = document.getElementById('sidePanelBody');
+    if (body) body.appendChild(_dragOverlay);
+
+    // Hide the code content — the container still occupies space,
+    // so no reflow, but the browser skips all text rendering work
+    const wrap = document.getElementById('spCodeWrap');
+    if (wrap) wrap.style.visibility = 'hidden';
+  }
+
+  function _doDrag(clientX) {
     if (!dragging) return;
-    panel.style.width = Math.max(MIN_W, Math.min(maxW(), startW + (startX - e.clientX))) + 'px';
-  });
-  document.addEventListener('mouseup', () => {
-    if (!dragging) return; dragging = false;
-    handle.classList.remove('dragging'); panel.classList.remove('no-transition');
-    document.body.style.cursor = ''; document.body.style.userSelect = '';
+    panel.style.width = Math.max(MIN_W, Math.min(maxW(), startW + (startX - clientX))) + 'px';
+  }
+
+  function _endDrag() {
+    if (!dragging) return;
+    dragging = false;
+
+    panel.classList.remove('no-transition');
+    document.body.style.cursor     = '';
+    document.body.style.userSelect = '';
+
+    // Remove overlay
+    if (_dragOverlay?.parentNode) _dragOverlay.parentNode.removeChild(_dragOverlay);
+
+    // Show content again, force re-render for new width
+    const wrap = document.getElementById('spCodeWrap');
+    if (wrap) wrap.style.visibility = '';
+
     _vsResumeRendering();
-  });
-  handle.addEventListener('touchstart', e => {
+  }
+
+  handle.addEventListener('mousedown', e => {
     if (isMob()) return;
-    dragging = true; startX = e.touches[0].clientX; startW = panel.offsetWidth;
-    panel.classList.add('no-transition'); _vsSuspendRendering();
-  }, { passive: true });
-  document.addEventListener('touchmove', e => {
-    if (!dragging) return;
-    panel.style.width = Math.max(MIN_W, Math.min(maxW(), startW + (startX - e.touches[0].clientX))) + 'px';
-  }, { passive: true });
-  document.addEventListener('touchend', () => {
-    if (!dragging) return; dragging = false;
-    panel.classList.remove('no-transition'); _vsResumeRendering();
+    e.preventDefault();
+    handle.classList.add('dragging');
+    _startDrag(e.clientX);
   });
 
-  _applyWrapState(); _initVirtualScroll();
+  document.addEventListener('mousemove', e => { _doDrag(e.clientX); });
+
+  document.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    handle.classList.remove('dragging');
+    _endDrag();
+  });
+
+  handle.addEventListener('touchstart', e => {
+    if (isMob()) return;
+    _startDrag(e.touches[0].clientX);
+  }, { passive: true });
+
+  document.addEventListener('touchmove', e => {
+    if (!dragging) return;
+    _doDrag(e.touches[0].clientX);
+  }, { passive: true });
+
+  document.addEventListener('touchend', () => {
+    if (!dragging) return;
+    _endDrag();
+  });
+
+  _applyWrapState();
+  _initVirtualScroll();
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _initSidePanelResize);

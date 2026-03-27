@@ -31,7 +31,10 @@ function _collectSavedWraps(t) {
     const k = w.dataset.blockidx;
     if (k !== undefined) {
       const pw = w.querySelector('.code-pre-wrap');
-      if (pw) { w._savedScrollTop = pw.scrollTop; w._wasAtBottom = (pw.scrollHeight - pw.scrollTop - pw.clientHeight) < 15; }
+      if (pw) {
+        w._savedScrollTop = pw.scrollTop;
+        w._wasAtBottom = (pw.scrollHeight - pw.scrollTop - pw.clientHeight) < 15;
+      }
       out[k] = w;
     }
     w.remove();
@@ -39,7 +42,9 @@ function _collectSavedWraps(t) {
   return out;
 }
 
-function _isAtBottom(el) { return !el || (el.scrollHeight - el.scrollTop - el.clientHeight) < 10; }
+function _isAtBottom(el) {
+  return !el || (el.scrollHeight - el.scrollTop - el.clientHeight) < 10;
+}
 
 function _smartScrollRestore(w, saved, atBottom) {
   if (!w) return;
@@ -47,23 +52,19 @@ function _smartScrollRestore(w, saved, atBottom) {
   else if (Math.abs(w.scrollTop - saved) > 5) w.scrollTop = saved;
 }
 
-// ─── Idle-aware scheduler ──────────────────────────────────────────────────
-const _ric = window.requestIdleCallback || (fn => setTimeout(fn, 1));
-
 function _scheduleRender(msgId, convoId, msg) {
   if (_renderTimers[msgId]) return;
   _renderTimers[msgId] = setTimeout(() => {
     delete _renderTimers[msgId];
     if (currentConvoId !== convoId) return;
     if (_interactionPause) { _pendingRender = { msgId, convoId, msg }; return; }
-    // Use rAF so we never block input
     requestAnimationFrame(() => _doRender(msgId, msg));
-  }, 250); // 250ms — 4 renders/sec max during streaming
+  }, 250);
 }
 
 function _doRender(msgId, msg) {
   const row = document.querySelector(`[data-msg-id="${msgId}"]`); if (!row) return;
-  const t = row.querySelector('.msg-text'); if (!t) return;
+  const t   = row.querySelector('.msg-text'); if (!t) return;
   const mw  = document.getElementById('messagesWrap');
   const st  = mw ? mw.scrollTop : 0;
   const bot = _isAtBottom(mw);
@@ -85,7 +86,7 @@ function _flushRender(msgId, msg) {
   if (_renderTimers[msgId]) { clearTimeout(_renderTimers[msgId]); delete _renderTimers[msgId]; }
   _interactionPause = false; _pendingRender = null;
   const row = document.querySelector(`[data-msg-id="${msgId}"]`); if (!row) return;
-  const t = row.querySelector('.msg-text'); if (!t) return;
+  const t   = row.querySelector('.msg-text'); if (!t) return;
   const mw  = document.getElementById('messagesWrap');
   const st  = mw ? mw.scrollTop : 0;
   const bot = _isAtBottom(mw);
@@ -97,7 +98,10 @@ function _flushRender(msgId, msg) {
   _smartScrollRestore(mw, st, bot);
 }
 
-function scrollBottomNow() { const w = document.getElementById('messagesWrap'); if (w) w.scrollTop = w.scrollHeight; }
+function scrollBottomNow() {
+  const w = document.getElementById('messagesWrap');
+  if (w) w.scrollTop = w.scrollHeight;
+}
 
 let _notifRequested = false;
 function _requestNotifPermission() {
@@ -115,27 +119,41 @@ function _isRateLimitError(m) {
 function _suggestModelSwitch() {
   const sel = document.getElementById('modelSelect'); const id = sel?.value || '';
   let s = '';
-  if (id.startsWith('global.')) { const o = sel?.querySelector(`option[value="${id.replace('global.','us.')}"]`); if (o) s=`Try "${o.textContent}" — separate quota`; }
-  else if (id.startsWith('us.')) { const o = sel?.querySelector(`option[value="${id.replace('us.','global.')}"]`); if (o) s=`Try "${o.textContent}" — separate quota`; }
+  if (id.startsWith('global.')) {
+    const o = sel?.querySelector(`option[value="${id.replace('global.','us.')}"]`);
+    if (o) s = `Try "${o.textContent}" — separate quota`;
+  } else if (id.startsWith('us.')) {
+    const o = sel?.querySelector(`option[value="${id.replace('us.','global.')}"]`);
+    if (o) s = `Try "${o.textContent}" — separate quota`;
+  }
   toast(s ? `💡 ${s}` : '💡 Try Global ↔ US variant — each has its own token quota', 'info');
 }
 
+// ─── Send message ──────────────────────────────────────────────────────────
 async function sendMessage() {
   if (!currentConvoId || streamRegistry.has(currentConvoId)) return;
   const input = document.getElementById('msgInput');
-  const text = input.value.trim();
+  const text  = input.value.trim();
   if (!text && !pendingFiles.length) return;
   if (!settings.apiKey) { toast('Configure API key in Settings','error'); openSettings(); return; }
   _requestNotifPermission();
   const convo = getConvo(currentConvoId); if (!convo) return;
+
   const uMsg = { id: Date.now().toString(), role:'user', text, files:[...pendingFiles], createdAt:Date.now() };
   if (!convo.messages.length && text) convo.title = text.slice(0,42) + (text.length>42?'…':'');
-  convo.messages.push(uMsg); bumpConvoToTop(currentConvoId); saveConvos(); appendMsgEl(uMsg);
-  input.value=''; autoResize(input); pendingFiles=[]; renderFilePreview();
-  userScrolledUp=false; _setScrollBtnVisible(false);
+  convo.messages.push(uMsg);
+  bumpConvoToTop(currentConvoId);
+  saveConvos();
+  appendMsgEl(uMsg);
+
+  input.value = ''; autoResize(input);
+  pendingFiles = []; renderFilePreview();
+  userScrolledUp = false; _setScrollBtnVisible(false);
+
   await runStream(currentConvoId);
 }
 
+// ─── Run stream ────────────────────────────────────────────────────────────
 async function runStream(convoId) {
   const convo = getConvo(convoId); if (!convo) return;
   const opt      = document.getElementById('modelSelect').selectedOptions[0];
@@ -148,11 +166,17 @@ async function runStream(convoId) {
 
   const aMsg = {
     id:(Date.now()+1).toString(), role:'assistant', text:'', thinking:null,
-    _thinkingBudget: useThink?budget:0, createdAt:Date.now(),
-    modelName: currentModelName||'Assistant',
+    _thinkingBudget: useThink ? budget : 0,
+    createdAt: Date.now(),
+    modelName: currentModelName || 'Assistant',
   };
   convo.messages.push(aMsg); saveConvos();
-  if (currentConvoId===convoId) { appendMsgEl(aMsg,true); if (!userScrolledUp) scrollBottomNow(); }
+
+  if (currentConvoId === convoId) {
+    appendMsgEl(aMsg, true);
+    scrollBottomNow();
+  }
+
   setStreamingUI(true); renderChatList();
 
   const ac = new AbortController();
@@ -162,7 +186,7 @@ async function runStream(convoId) {
     .filter(m => !m._error && (m.text?.trim() || m.files?.length))
     .map(m => ({ role:m.role, text:m.text, files:m.files||[] }));
 
-  const saveInterval = setInterval(() => saveConvos(), 2000); // 2s instead of 1s
+  const saveInterval = setInterval(() => saveConvos(), 2000);
 
   try {
     const res = await fetch('/api/chat/stream', {
@@ -186,11 +210,11 @@ async function runStream(convoId) {
       for (const line of lines) {
         if (!line.startsWith('data: ')) continue;
         try { handleSSE(JSON.parse(line.slice(6)), convoId, aMsg, budget); }
-        catch (e) { console.error('[SSE]', e); }
+        catch(e) { console.error('[SSE]', e); }
       }
-      if (currentConvoId===convoId && !userScrolledUp) scrollBottomNow();
+      if (currentConvoId === convoId && !userScrolledUp) scrollBottomNow();
     }
-  } catch (e) {
+  } catch(e) {
     if (e.name !== 'AbortError') {
       aMsg._error = e.message || 'Connection failed';
       toast('Stream error: ' + aMsg._error, 'error');
@@ -203,18 +227,19 @@ async function runStream(convoId) {
 
   if (currentConvoId === convoId) {
     try {
-      _flushRender(aMsg.id, aMsg); finalizeMsgEl(aMsg);
+      _flushRender(aMsg.id, aMsg);
+      finalizeMsgEl(aMsg);
       if (!userScrolledUp) scrollBottomNow();
       if (!aMsg._error) {
         const u = aMsg.usage ? ` · ${aMsg.usage.outputTokens||0} tokens` : '';
         toast(`✓ Complete${u}`,'success'); playSound();
         if (document.hidden) sendNotif('◈ Reply ready', aMsg.text.slice(0,100));
       }
-    } catch(e) { console.error('[stream] Finalize:',e); }
+    } catch(err) { console.error('[stream] Finalize:',err); }
     finally { setStreamingUI(false); }
   } else {
     try { const r=document.querySelector(`[data-msg-id="${aMsg.id}"]`); if(r) finalizeMsgEl(aMsg); }
-    catch(e) {}
+    catch(err) {}
     unreadCounts[convoId] = (unreadCounts[convoId]||0)+1;
     saveUnread(); playSound();
     sendNotif(`◈ Reply in "${getConvo(convoId)?.title?.slice(0,28)}…"`, aMsg.text.slice(0,120), convoId);
@@ -225,6 +250,7 @@ async function runStream(convoId) {
   saveConvos(); renderChatList();
 }
 
+// ─── SSE handler ───────────────────────────────────────────────────────────
 function handleSSE(ev, convoId, msg, budget) {
   const isCur = currentConvoId === convoId;
   const getRow = () => isCur ? document.querySelector(`[data-msg-id="${msg.id}"]`) : null;
@@ -265,8 +291,7 @@ function handleSSE(ev, convoId, msg, budget) {
     const row=getRow(); if(!row) return;
     const tb=row.querySelector('.thinking-block');
     if (tb) {
-      tb.querySelector('.thinking-cursor')?.remove();
-      tb.querySelector('.thinking-progress')?.remove();
+      tb.querySelectorAll('.thinking-cursor,.thinking-progress').forEach(el=>el.remove());
       const ic=tb.querySelector('.thinking-spinner'); if(ic) ic.className='thinking-dot';
       const sl=tb.querySelector('.thinking-header-text');
       if (sl) { const e=Math.round((msg.thinking||'').length/4); sl.textContent=`REASONING — ${tokStr(e)} est. tokens`; }
@@ -274,7 +299,11 @@ function handleSSE(ev, convoId, msg, budget) {
     }
   }
 
-  if (ev.type === 'text_delta') { msg.text += ev.text; if (isCur) _scheduleRender(msg.id,convoId,msg); }
+  if (ev.type === 'text_delta') {
+    msg.text += ev.text;
+    if (isCur) _scheduleRender(msg.id, convoId, msg);
+  }
+
   if (ev.type === 'done') { msg.stopReason = ev.stopReason; }
 
   if (ev.type === 'usage') {
