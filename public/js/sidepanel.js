@@ -1,6 +1,4 @@
 // public/js/sidepanel.js — FULL REPLACEMENT
-// Virtual scrolling: only renders ~50 rows at a time regardless of file size.
-// A 2000-line file renders as fast as a 10-line file.
 
 const _langBadgeColours = {
   js:'#f7df1e',javascript:'#f7df1e',ts:'#3178c6',typescript:'#3178c6',
@@ -12,126 +10,175 @@ const _langBadgeColours = {
 };
 
 let _liveSidePanelInfo = null;
-let _wrapOn = true;
-let _liveUpdateTimer = null;
+let _wrapOn            = true;
+let _liveUpdateTimer   = null;
 
 // ─── Virtual scroll state ──────────────────────────────────────────────────
-const VS_ROW_H   = 21.45;  // px per line: 13px font * 1.65 line-height
-const VS_PAD     = 16;     // top/bottom padding inside code
-const VS_BUFFER  = 40;     // extra rows to render above/below viewport
-let _vsLines     = [];     // array of highlighted HTML strings
-let _vsRafPending = false;
+const VS_ROW_H  = 21.45;  // 13px * 1.65 line-height
+const VS_PAD    = 16;
+const VS_BUFFER = 30;
 
-// ─── Split highlighted HTML into per-line segments ─────────────────────────
+let _vsLines     = [];
+let _vsCodeHash  = '';
+let _vsLastFirst = -1;
+let _vsLastLast  = -1;
+let _vsRafId     = 0;
+let _vsSuspended = false;  // true while resize is dragging
+
+// ─── Fast hash ────────────────────────────────────────────────────────────
+function _fastHash(str) {
+  let h = 0;
+  const len = Math.min(str.length, 4000); // sample first 4k chars for speed
+  for (let i = 0; i < len; i++) h = ((h << 5) - h + str.charCodeAt(i)) | 0;
+  return h + '_' + str.length;
+}
+
+// ─── Split highlighted HTML into per-line strings ──────────────────────────
 function _splitHtmlLines(html) {
   const lines = []; let line = '', openTags = [], i = 0;
   while (i < html.length) {
     if (html[i] === '<') {
-      const end = html.indexOf('>', i); if (end === -1) { line += html[i++]; continue; }
-      const tag = html.slice(i, end+1), isClose = tag.startsWith('</');
+      const end = html.indexOf('>', i);
+      if (end === -1) { line += html[i++]; continue; }
+      const tag = html.slice(i, end + 1), isClose = tag.startsWith('</');
       if (!isClose) { if (!tag.endsWith('/>')) openTags.push(tag); line += tag; }
       else { openTags.pop(); line += tag; }
       i = end + 1;
     } else if (html[i] === '\n') {
-      const closing = openTags.slice().reverse().map(t => '</' + (t.match(/^<([a-zA-Z][a-zA-Z0-9]*)/)?.[1]||'span') + '>').join('');
+      const closing = openTags.slice().reverse()
+        .map(t => '</' + (t.match(/^<([a-zA-Z][a-zA-Z0-9]*)/)?.[1] || 'span') + '>')
+        .join('');
       lines.push(line + closing); line = openTags.join(''); i++;
     } else { line += html[i++]; }
   }
   if (line) lines.push(line);
-  if (lines.length > 0 && lines[lines.length-1] === '') lines.pop();
+  if (lines.length && lines[lines.length - 1] === '') lines.pop();
   return lines;
 }
 
-// ─── Full height of virtual container ─────────────────────────────────────
-function _vsFullHeight(lineCount) {
-  return VS_PAD + lineCount * VS_ROW_H + VS_PAD;
+// ─── Highlight once and cache ──────────────────────────────────────────────
+function _vsHighlight(code, lang) {
+  const hash = _fastHash(code);
+  if (hash === _vsCodeHash) return;
+  _vsCodeHash  = hash;
+  _vsLastFirst = -1;
+  _vsLastLast  = -1;
+
+  const tmp = document.createElement('code');
+  tmp.className = lang ? `language-${lang}` : 'language-plaintext';
+  tmp.textContent = code;
+  try { hljs.highlightElement(tmp); } catch (e) {}
+  _vsLines = _splitHtmlLines(tmp.innerHTML);
 }
 
-// ─── Render only visible slice ─────────────────────────────────────────────
-function _vsRenderWindow(scrollTop, clientHeight) {
+// ─── Write DOM only when visible range changes ─────────────────────────────
+function _vsRenderWindow() {
+  if (_vsSuspended) return;  // skip ALL writes during resize drag
+
+  const body      = document.getElementById('sidePanelBody');
   const container = document.getElementById('spCodeWrap');
-  if (!container || !_vsLines.length) return;
+  if (!body || !container || !_vsLines.length) return;
 
-  const total = _vsLines.length;
-  const fullH = _vsFullHeight(total);
+  const scrollTop    = body.scrollTop;
+  const clientHeight = body.clientHeight;
+  const total        = _vsLines.length;
 
-  // Which lines are visible?
-  const firstVisible = Math.max(0, Math.floor((scrollTop - VS_PAD) / VS_ROW_H) - VS_BUFFER);
-  const lastVisible  = Math.min(total - 1, Math.ceil((scrollTop + clientHeight - VS_PAD) / VS_ROW_H) + VS_BUFFER);
+  const first = Math.max(0, Math.floor((scrollTop - VS_PAD) / VS_ROW_H) - VS_BUFFER);
+  const last  = Math.min(total - 1, Math.ceil((scrollTop + clientHeight - VS_PAD) / VS_ROW_H) + VS_BUFFER);
 
-  // Top spacer height (rows above rendered window)
-  const topSpacerH   = VS_PAD + firstVisible * VS_ROW_H;
-  // Bottom spacer height
-  const bottomSpacerH = (total - 1 - lastVisible) * VS_ROW_H + VS_PAD;
+  // Skip DOM write if range unchanged
+  if (first === _vsLastFirst && last === _vsLastLast) return;
+  _vsLastFirst = first;
+  _vsLastLast  = last;
 
-  // Build table rows for visible window
-  const parts = ['<table class="sp-code-table"><tbody>'];
-  // Top spacer row
-  if (topSpacerH > 0) {
-    parts.push(`<tr class="sp-spacer"><td style="height:${topSpacerH}px;padding:0" colspan="2"></td></tr>`);
+  const topH    = VS_PAD + first * VS_ROW_H;
+  const bottomH = Math.max(0, (total - 1 - last) * VS_ROW_H + VS_PAD);
+
+  const parts = [];
+  parts.push('<table class="sp-code-table"><tbody>');
+  if (topH > 0) parts.push(
+    `<tr class="sp-spacer"><td colspan="2" style="height:${topH.toFixed(1)}px"></td></tr>`
+  );
+  for (let i = first; i <= last; i++) {
+    parts.push(
+      `<tr class="sp-line"><td class="sp-line-num">${i + 1}</td>` +
+      `<td class="sp-line-code">${_vsLines[i] || '\u200B'}</td></tr>`
+    );
   }
-  // Visible rows
-  for (let i = firstVisible; i <= lastVisible; i++) {
-    parts.push(`<tr class="sp-line"><td class="sp-line-num">${i + 1}</td><td class="sp-line-code">${_vsLines[i] || '\u200B'}</td></tr>`);
-  }
-  // Bottom spacer row
-  if (bottomSpacerH > 0) {
-    parts.push(`<tr class="sp-spacer"><td style="height:${bottomSpacerH}px;padding:0" colspan="2"></td></tr>`);
-  }
+  if (bottomH > 0) parts.push(
+    `<tr class="sp-spacer"><td colspan="2" style="height:${bottomH.toFixed(1)}px"></td></tr>`
+  );
   parts.push('</tbody></table>');
 
   container.innerHTML = parts.join('');
 }
 
-// ─── Schedule a virtual render via rAF (debounced) ─────────────────────────
+// ─── Schedule via rAF (one pending at a time) ─────────────────────────────
 function _vsScheduleRender() {
-  if (_vsRafPending) return;
-  _vsRafPending = true;
-  requestAnimationFrame(() => {
-    _vsRafPending = false;
-    const body = document.getElementById('sidePanelBody');
-    if (body) _vsRenderWindow(body.scrollTop, body.clientHeight);
+  if (_vsRafId || _vsSuspended) return;
+  _vsRafId = requestAnimationFrame(() => {
+    _vsRafId = 0;
+    _vsRenderWindow();
   });
 }
 
-// ─── Main render function ──────────────────────────────────────────────────
+// ─── Cancel any pending rAF ───────────────────────────────────────────────
+function _vsCancelRender() {
+  if (_vsRafId) { cancelAnimationFrame(_vsRafId); _vsRafId = 0; }
+}
+
+// ─── Pause/resume rendering during resize ─────────────────────────────────
+function _vsSuspendRendering() {
+  _vsSuspended = true;
+  _vsCancelRender();
+}
+
+function _vsResumeRendering() {
+  _vsSuspended  = false;
+  _vsLastFirst  = -1;   // force fresh render on resume
+  _vsLastLast   = -1;
+  _vsScheduleRender();
+}
+
+// ─── Main render entry ─────────────────────────────────────────────────────
 function _renderSidePanelCode(code, lang) {
   const body = document.getElementById('sidePanelBody');
   if (!body) return;
 
-  const savedTop  = body.scrollTop;
-  const savedLeft = body.scrollLeft;
+  const savedTop    = body.scrollTop;
+  const savedLeft   = body.scrollLeft;
   const wasAtBottom = (body.scrollHeight - body.scrollTop - body.clientHeight) < 20;
 
-  // 1. Highlight synchronously (fast — just string ops, no DOM)
-  const tmp = document.createElement('code');
-  tmp.className = lang ? `language-${lang}` : 'language-plaintext';
-  tmp.textContent = code;
-  try { hljs.highlightElement(tmp); } catch(e) {}
+  _vsHighlight(code, lang);
 
-  // 2. Split into line strings (no DOM creation yet)
-  _vsLines = _splitHtmlLines(tmp.innerHTML);
+  // Set exact container height for correct scrollbar
+  const container = document.getElementById('spCodeWrap');
+  if (container) {
+    container.style.height = (VS_PAD + _vsLines.length * VS_ROW_H + VS_PAD).toFixed(1) + 'px';
+  }
 
-  // 3. Render only the visible window
-  _vsRenderWindow(wasAtBottom ? 0 : savedTop, body.clientHeight);
+  _vsLastFirst = -1;
+  _vsLastLast  = -1;
+  _vsRenderWindow();
 
-  // 4. Restore scroll
   if (wasAtBottom) {
-    requestAnimationFrame(() => { body.scrollTop = body.scrollHeight; });
+    requestAnimationFrame(() => {
+      body.scrollTop = body.scrollHeight;
+      _vsScheduleRender();
+    });
   } else {
-    body.scrollTop = savedTop;
+    body.scrollTop  = savedTop;
     body.scrollLeft = savedLeft;
   }
 }
 
-// ─── Scroll listener: re-render visible window ─────────────────────────────
+// ─── Init virtual scroll listener (once) ──────────────────────────────────
+let _vsScrollBound = false;
 function _initVirtualScroll() {
+  if (_vsScrollBound) return;
+  _vsScrollBound = true;
   const body = document.getElementById('sidePanelBody');
-  if (!body) return;
-  body.addEventListener('scroll', _vsScheduleRender, { passive: true });
-  // Re-render on resize
-  const ro = new ResizeObserver(_vsScheduleRender);
-  ro.observe(body);
+  if (body) body.addEventListener('scroll', _vsScheduleRender, { passive: true });
 }
 
 // ─── Wrap state ────────────────────────────────────────────────────────────
@@ -153,13 +200,21 @@ function openSidePanel(code, lang, filename, streamInfo) {
   const langEl = document.getElementById('sidePanelLang');
   langEl.textContent = spLang.toUpperCase();
   const colour = _langBadgeColours[spLang.toLowerCase()];
-  if (colour) { langEl.style.color = colour; langEl.style.background = colour+'1a'; langEl.style.border = '1px solid '+colour+'48'; }
-  else { langEl.style.color = langEl.style.background = langEl.style.border = ''; }
+  if (colour) {
+    langEl.style.color      = colour;
+    langEl.style.background = colour + '1a';
+    langEl.style.border     = '1px solid ' + colour + '48';
+  } else {
+    langEl.style.color = langEl.style.background = langEl.style.border = '';
+  }
 
-  const copyBtn = document.getElementById('spCopyBtn');
-  copyBtn.textContent = 'Copy'; copyBtn.classList.remove('success');
+  document.getElementById('spCopyBtn').textContent = 'Copy';
+  document.getElementById('spCopyBtn').classList.remove('success');
 
   _applyWrapState();
+  _initVirtualScroll();
+
+  _vsCodeHash  = '';   // force fresh highlight
   _renderSidePanelCode(code, spLang);
 
   const panel = document.getElementById('sidePanel');
@@ -168,19 +223,21 @@ function openSidePanel(code, lang, filename, streamInfo) {
 
   requestAnimationFrame(() => {
     const body = document.getElementById('sidePanelBody');
-    if (body) { body.scrollTop = body.scrollHeight; _vsRenderWindow(body.scrollTop, body.clientHeight); }
+    if (body) { body.scrollTop = body.scrollHeight; _vsScheduleRender(); }
   });
 }
 
-// ─── Live update during streaming (throttled) ─────────────────────────────
+// ─── Live update (throttled to 400ms) ─────────────────────────────────────
 function updateLiveSidePanel(container, msgId) {
   if (!_liveSidePanelInfo || _liveSidePanelInfo.msgId !== msgId) return;
-  if (!document.getElementById('sidePanel').classList.contains('open')) { _liveSidePanelInfo = null; return; }
+  if (!document.getElementById('sidePanel').classList.contains('open')) {
+    _liveSidePanelInfo = null; return;
+  }
   if (_liveUpdateTimer) return;
   _liveUpdateTimer = setTimeout(() => {
     _liveUpdateTimer = null;
     _doLiveUpdate(container, msgId);
-  }, 300);
+  }, 400);
 }
 
 function _doLiveUpdate(container, msgId) {
@@ -197,11 +254,15 @@ function clearLiveSidePanelFor(msgId) {
   if (_liveUpdateTimer) { clearTimeout(_liveUpdateTimer); _liveUpdateTimer = null; }
 }
 
-// ─── Close / Copy / Download / Wrap ───────────────────────────────────────
+// ─── Close ─────────────────────────────────────────────────────────────────
 function closeSidePanel() {
   const panel = document.getElementById('sidePanel');
-  panel.classList.remove('open'); panel.style.width = '';
-  _liveSidePanelInfo = null; _vsLines = [];
+  panel.classList.remove('open');
+  panel.style.width = '';
+  _liveSidePanelInfo = null;
+  _vsLines = []; _vsCodeHash = ''; _vsLastFirst = -1; _vsLastLast = -1;
+  _vsSuspended = false;
+  _vsCancelRender();
   if (_liveUpdateTimer) { clearTimeout(_liveUpdateTimer); _liveUpdateTimer = null; }
 }
 
@@ -213,53 +274,88 @@ function copySidePanel() {
   });
 }
 function downloadSidePanel() { downloadCode(spCode, spLang, spFilename); }
-function toggleSidePanelWrap() { _wrapOn = !_wrapOn; _applyWrapState(); _vsScheduleRender(); }
+function toggleSidePanelWrap() {
+  _wrapOn = !_wrapOn;
+  _applyWrapState();
+  _vsLastFirst = -1; _vsLastLast = -1;
+  _vsScheduleRender();
+}
 
 // ─── Resize handle ─────────────────────────────────────────────────────────
 function _initSidePanelResize() {
-  const panel = document.getElementById('sidePanel');
+  const panel  = document.getElementById('sidePanel');
   const handle = document.getElementById('spResizeHandle');
   if (!handle || !panel) return;
 
   let startX = 0, startW = 0, dragging = false;
-  const MIN_W = 280;
-  const getMaxW = () => Math.min(Math.floor(window.innerWidth * 0.75), window.innerWidth - 400);
+  const MIN_W       = 280;
+  const getMaxW     = () => Math.min(Math.floor(window.innerWidth * 0.75), window.innerWidth - 400);
   const isMobileView = () => window.innerWidth <= 768;
 
+  // ── Mouse ────────────────────────────────────────────────────────────
   handle.addEventListener('mousedown', function(e) {
-    if (isMobileView()) return; e.preventDefault();
-    dragging = true; startX = e.clientX; startW = panel.offsetWidth;
-    handle.classList.add('dragging'); panel.classList.add('no-transition');
-    document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none';
+    if (isMobileView()) return;
+    e.preventDefault();
+    dragging = true;
+    startX   = e.clientX;
+    startW   = panel.offsetWidth;
+    handle.classList.add('dragging');
+    panel.classList.add('no-transition');
+    document.body.style.cursor     = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    // Suspend virtual scroll rendering for the duration of the drag
+    _vsSuspendRendering();
   });
+
   document.addEventListener('mousemove', function(e) {
     if (!dragging) return;
-    panel.style.width = Math.max(MIN_W, Math.min(getMaxW(), startW + (startX - e.clientX))) + 'px';
-    _vsScheduleRender();
+    // Only update the CSS width — no content re-render
+    const newW = Math.max(MIN_W, Math.min(getMaxW(), startW + (startX - e.clientX)));
+    panel.style.width = newW + 'px';
   });
+
   document.addEventListener('mouseup', function() {
-    if (!dragging) return; dragging = false;
-    handle.classList.remove('dragging'); panel.classList.remove('no-transition');
-    document.body.style.cursor = ''; document.body.style.userSelect = '';
-    _vsScheduleRender();
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove('dragging');
+    panel.classList.remove('no-transition');
+    document.body.style.cursor     = '';
+    document.body.style.userSelect = '';
+
+    // Resume and render once now that drag is done
+    _vsResumeRendering();
   });
+
+  // ── Touch ────────────────────────────────────────────────────────────
   handle.addEventListener('touchstart', function(e) {
     if (isMobileView()) return;
-    dragging = true; startX = e.touches[0].clientX; startW = panel.offsetWidth;
+    dragging = true;
+    startX   = e.touches[0].clientX;
+    startW   = panel.offsetWidth;
     panel.classList.add('no-transition');
+    _vsSuspendRendering();
   }, { passive: true });
+
   document.addEventListener('touchmove', function(e) {
     if (!dragging) return;
-    panel.style.width = Math.max(MIN_W, Math.min(getMaxW(), startW + (startX - e.touches[0].clientX))) + 'px';
+    const newW = Math.max(MIN_W, Math.min(getMaxW(), startW + (startX - e.touches[0].clientX)));
+    panel.style.width = newW + 'px';
   }, { passive: true });
+
   document.addEventListener('touchend', function() {
-    if (!dragging) return; dragging = false;
-    panel.classList.remove('no-transition'); _vsScheduleRender();
+    if (!dragging) return;
+    dragging = false;
+    panel.classList.remove('no-transition');
+    _vsResumeRendering();
   });
 
-  _initVirtualScroll();
   _applyWrapState();
+  _initVirtualScroll();
 }
 
-if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _initSidePanelResize);
-else _initSidePanelResize();
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _initSidePanelResize);
+} else {
+  _initSidePanelResize();
+}
