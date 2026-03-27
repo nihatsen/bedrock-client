@@ -6,27 +6,22 @@
 <title>Bedrock Chat</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23d4a574'/%3E%3Ctext x='16' y='23' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='800' font-size='18' fill='%231a1a1a'%3EB%3C/text%3E%3C/svg%3E">
 
-<!-- DNS prefetch for CDNs so connections start immediately -->
 <link rel="dns-prefetch" href="https://cdnjs.cloudflare.com">
 <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
 <link rel="dns-prefetch" href="https://fonts.googleapis.com">
 <link rel="dns-prefetch" href="https://fonts.gstatic.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 
-<!-- Google Fonts: non-blocking load (media=print trick) -->
 <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&family=Inter:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&family=Inter:wght@400;500;600;700&display=swap" media="print" onload="this.media='all'">
 <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&family=Inter:wght@400;500;600;700&display=swap"></noscript>
 
-<!-- Highlight.js CSS: non-blocking -->
 <link rel="preload" as="style" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css" media="print" onload="this.media='all'">
 <noscript><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css"></noscript>
 
-<!-- Local CSS: only blocking stylesheet — loads from same server, fast -->
 <link rel="stylesheet" href="/css/style.css">
 
-<!-- Preload CDN scripts so they download early -->
 <link rel="preload" as="script" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js">
 <link rel="preload" as="script" href="https://cdn.jsdelivr.net/npm/marked/marked.min.js">
 </head>
@@ -84,7 +79,7 @@
 
         <div class="topbar-thinking" id="thinkingToggle" onclick="toggleThinking()">
           <div class="toggle-track"><div class="toggle-thumb"></div></div>
-          <span>Extended Thinking</span>
+          <span class="thinking-label">Extended Thinking</span>
         </div>
 
         <div class="topbar-budget hidden" id="budgetWrap">
@@ -143,10 +138,9 @@
     <!-- ─── SIDE PANEL (Code Viewer) ──────────────────────────────────── -->
     <aside class="side-panel" id="sidePanel">
       <div class="sp-resize-handle" id="spResizeHandle" title="Drag to resize"></div>
-
       <div class="side-panel-header">
         <span class="side-panel-title" id="sidePanelTitle">Code</span>
-        <span class="side-panel-lang"  id="sidePanelLang">JS</span>
+        <span class="side-panel-lang" id="sidePanelLang">JS</span>
         <div class="side-panel-actions">
           <button class="sp-btn" id="spWrapBtn" onclick="toggleSidePanelWrap()">↵ Wrap: on</button>
           <button class="sp-btn" id="spCopyBtn" onclick="copySidePanel()">Copy</button>
@@ -237,10 +231,8 @@
 <div class="toast" id="toast"></div>
 
 <!-- ─── ALL SCRIPTS: defer so they never block rendering ─────────────── -->
-<!-- CDN scripts download in parallel with page parse -->
 <script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-<!-- Local scripts execute in order after CDN scripts -->
 <script defer src="/js/state.js"></script>
 <script defer src="/js/utils.js"></script>
 <script defer src="/js/conversations.js"></script>

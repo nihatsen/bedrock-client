@@ -91,56 +91,36 @@ function scrollBottomNow() { const w = document.getElementById('messagesWrap'); 
 let _notifRequested = false;
 function _requestNotifPermission() { if (_notifRequested) return; _notifRequested = true; if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission(); }
 
-// ─── Rate limit detection + model switch suggestion ───────────────────────
 function _isRateLimitError(errMsg) {
   if (!errMsg) return false;
   const lo = errMsg.toLowerCase();
-  return lo.includes('too many tokens') ||
-         lo.includes('throttl') ||
-         lo.includes('rate limit') ||
-         lo.includes('rate exceeded') ||
-         lo.includes('too many requests') ||
-         lo.includes('please wait') ||
-         lo.includes('serviceunav') ||
-         lo.includes('modelerror') && lo.includes('capacity');
+  return lo.includes('too many tokens') || lo.includes('throttl') || lo.includes('rate limit') ||
+         lo.includes('rate exceeded') || lo.includes('too many requests') || lo.includes('please wait') ||
+         lo.includes('serviceunav') || (lo.includes('modelerror') && lo.includes('capacity'));
 }
 
 function _suggestModelSwitch() {
   const sel = document.getElementById('modelSelect');
   const currentId = sel?.value || '';
-
-  // Determine current prefix and suggest alternative
   let suggestion = '';
   if (currentId.startsWith('global.')) {
-    // Currently on global → suggest US
     const usId = currentId.replace('global.', 'us.');
     const usOpt = sel?.querySelector(`option[value="${usId}"]`);
     if (usOpt) suggestion = `Try switching to "${usOpt.textContent}" (US) — separate token quota`;
   } else if (currentId.startsWith('us.')) {
-    // Currently on US → suggest global
     const globalId = currentId.replace('us.', 'global.');
     const globalOpt = sel?.querySelector(`option[value="${globalId}"]`);
     if (globalOpt) suggestion = `Try switching to "${globalOpt.textContent}" (Global) — separate token quota`;
   } else {
-    // Base model → suggest US or global variant
-    const provider = currentId.split('.')[0]; // e.g. "anthropic"
-    const modelPart = currentId.split('.').slice(1).join('.'); // e.g. "claude-sonnet-4-6"
-    const usId = `us.${currentId}`;
-    const globalId = `global.${currentId}`;
-    const usOpt = sel?.querySelector(`option[value="${usId}"]`);
-    const globalOpt = sel?.querySelector(`option[value="${globalId}"]`);
+    const globalOpt = sel?.querySelector(`option[value="global.${currentId}"]`);
+    const usOpt = sel?.querySelector(`option[value="us.${currentId}"]`);
     if (globalOpt) suggestion = `Try switching to "${globalOpt.textContent}" (Global) — separate token quota`;
     else if (usOpt) suggestion = `Try switching to "${usOpt.textContent}" (US) — separate token quota`;
   }
-
-  if (suggestion) {
-    toast(`💡 ${suggestion}`, 'info');
-  } else {
-    toast('💡 Try switching to a different model variant (Global ↔ US) — each has its own token quota', 'info');
-  }
+  if (suggestion) toast(`💡 ${suggestion}`, 'info');
+  else toast('💡 Try switching to a different model variant (Global ↔ US) — each has its own token quota', 'info');
 }
 
-// ─── Send message ─────────────────────────────────────────────────────────
 async function sendMessage() {
   if (!currentConvoId || streamRegistry.has(currentConvoId)) return;
   const input = document.getElementById('msgInput');
@@ -158,7 +138,6 @@ async function sendMessage() {
   await runStream(currentConvoId);
 }
 
-// ─── Run stream ───────────────────────────────────────────────────────────
 async function runStream(convoId) {
   const convo = getConvo(convoId); if (!convo) return;
   const opt = document.getElementById('modelSelect').selectedOptions[0];
@@ -216,11 +195,7 @@ async function runStream(convoId) {
     if (e.name !== 'AbortError') {
       aMsg._error = e.message || 'Connection failed';
       toast('Stream error: ' + aMsg._error, 'error');
-
-      // ── Rate limit? Suggest switching model ────────────────────────
-      if (_isRateLimitError(aMsg._error)) {
-        setTimeout(() => _suggestModelSwitch(), 1500);
-      }
+      if (_isRateLimitError(aMsg._error)) setTimeout(() => _suggestModelSwitch(), 1500);
     }
   }
 
@@ -251,7 +226,6 @@ async function runStream(convoId) {
   saveConvos(); renderChatList();
 }
 
-// ─── SSE event handler ────────────────────────────────────────────────────
 function handleSSE(ev, convoId, msg, budget) {
   const isCur = currentConvoId === convoId;
   const getRow = () => isCur ? document.querySelector(`[data-msg-id="${msg.id}"]`) : null;
@@ -271,8 +245,24 @@ function handleSSE(ev, convoId, msg, budget) {
     const row = getRow(); if (!row) return;
     let tb = row.querySelector('.thinking-block');
     if (!tb) { const body = row.querySelector('.msg-body'); if (body) { tb = buildThinkingBlock('', true, budget); body.appendChild(tb); } }
-    const ht = row.querySelector('.thinking-header-text');
-    if (ht) { const est = Math.round(msg.thinking.length / 4); ht.textContent = `THINKING… — ~${tokStr(est)}${budget > 0 ? ` / ${tokStr(budget)}` : ''} tokens`; }
+
+    // Update status line (token count)
+    const statusLine = row.querySelector('.thinking-header-text');
+    if (statusLine) {
+      const est = Math.round(msg.thinking.length / 4);
+      const budgetStr = budget > 0 ? ` / ${tokStr(budget)}` : '';
+      statusLine.textContent = `THINKING… — ~${tokStr(est)}${budgetStr} tokens`;
+    }
+
+    // Update topic preview (first meaningful line of thinking)
+    const topicLine = row.querySelector('.thinking-topic');
+    if (topicLine) {
+      const topic = _getThinkingTopic(msg.thinking);
+      topicLine.textContent = topic;
+      topicLine.style.display = topic ? '' : 'none';
+    }
+
+    // Update content
     const c = row.querySelector('.thinking-content');
     if (c) {
       const tn = c.firstChild;
@@ -280,9 +270,15 @@ function handleSSE(ev, convoId, msg, budget) {
       else { c.innerHTML = ''; c.appendChild(document.createTextNode(msg.thinking)); const cur = document.createElement('span'); cur.className = 'thinking-cursor'; c.appendChild(cur); }
       c.scrollTop = c.scrollHeight;
     }
+
+    // Update progress bar
     const fill = row.querySelector('.thinking-progress-fill');
     const label = row.querySelector('.thinking-progress-label');
-    if (fill && budget > 0) { const est = Math.round(msg.thinking.length / 4); fill.style.width = Math.min(100, (est / budget) * 100) + '%'; if (label) label.textContent = `~${tokStr(est)} / ${tokStr(budget)} tokens`; }
+    if (fill && budget > 0) {
+      const est = Math.round(msg.thinking.length / 4);
+      fill.style.width = Math.min(100, (est / budget) * 100) + '%';
+      if (label) label.textContent = `~${tokStr(est)} / ${tokStr(budget)} tokens`;
+    }
   }
 
   if (ev.type === 'thinking_end') {
@@ -292,12 +288,19 @@ function handleSSE(ev, convoId, msg, budget) {
     if (tb) {
       tb.querySelector('.thinking-cursor')?.remove();
       tb.querySelector('.thinking-progress')?.remove();
-      const h = tb.querySelector('.thinking-header');
-      if (h) {
+
+      // Update icon from spinner to dot
+      const icon = tb.querySelector('.thinking-spinner');
+      if (icon) { icon.className = 'thinking-dot'; }
+
+      // Update status line
+      const statusLine = tb.querySelector('.thinking-header-text');
+      if (statusLine) {
         const est = Math.round((msg.thinking || '').length / 4);
-        h.innerHTML = `<div class="thinking-dot"></div><span class="thinking-header-text" style="flex:1">REASONING — ${tokStr(est)} est. tokens</span><svg class="thinking-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>`;
-        h.onclick = () => tb.classList.toggle('collapsed');
+        statusLine.textContent = `REASONING — ${tokStr(est)} est. tokens`;
       }
+
+      // Re-bind header click (was already set in buildThinkingBlock)
       if (!tb.classList.contains('collapsed')) tb.classList.add('collapsed');
     }
   }
@@ -318,10 +321,6 @@ function handleSSE(ev, convoId, msg, budget) {
   if (ev.type === 'error') {
     msg._error = ev.message;
     toast('Bedrock error: ' + ev.message, 'error');
-
-    // ── Rate limit? Suggest switching model ──────────────────────────
-    if (_isRateLimitError(ev.message)) {
-      setTimeout(() => _suggestModelSwitch(), 1500);
-    }
+    if (_isRateLimitError(ev.message)) setTimeout(() => _suggestModelSwitch(), 1500);
   }
 }

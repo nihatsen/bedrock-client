@@ -21,35 +21,40 @@ function init() {
   // 1. Recover streams (sync)
   recoverInterruptedStreams();
 
-  // 2. Populate model select IMMEDIATELY from fallback — zero wait
+  // 2. Populate model select from fallback FIRST (instant, zero network)
   _populateModelSelect(FALLBACK_MODELS);
 
-  // 3. Apply UI state (sync, instant)
-  applySidebarState();
+  // 3. Apply thinking state AFTER model select is populated
+  //    (so slider max is already set by onModelChange inside _populateModelSelect)
   applyThinkingState();
+
+  // 4. Apply sidebar state
+  applySidebarState();
+
+  // 5. Init scroll watcher
   initScrollWatcher();
 
-  // 4. Render conversations (sync, instant — from localStorage)
+  // 6. Render conversations from localStorage (instant)
   renderChatList();
   if (conversations.length > 0) loadConvo(conversations[0].id);
   else newChat();
 
-  // 5. Settings form (sync)
+  // 7. Settings form
   syncSettingsForm();
 
-  // 6. Input handlers (sync)
+  // 8. Input handlers
   initDragDrop();
   initPaste();
 
-  // 7. Background: fetch live model list and silently swap
-  //    No await — does NOT block anything above
-  _loadModelsBackground();
+  // 9. Background live model fetch — silently swaps when ready
+  if (settings.apiKey) {
+    _loadModelsBackground();
+  }
 
-  // 8. API key prompt
+  // 10. API key prompt
   setTimeout(() => { if (!settings.apiKey) openSettings(); }, 300);
 }
 
-// ─── Populate select from a model array ───────────────────────────────────
 function _populateModelSelect(models) {
   const sel = document.getElementById('modelSelect');
   if (!sel) return;
@@ -67,16 +72,15 @@ function _populateModelSelect(models) {
     sel.appendChild(opt);
   });
 
-  // If saved model not found, select first
-  if (sel.selectedIndex < 0 && sel.options.length > 0) sel.selectedIndex = 0;
+  // If saved model not in list, select first
+  if (!sel.querySelector(`option[value="${savedId}"]`) && sel.options.length > 0) {
+    sel.selectedIndex = 0;
+  }
 
   onModelChange();
 }
 
-// ─── Background model fetch — swaps list when ready, no flash ─────────────
 async function _loadModelsBackground() {
-  if (!settings.apiKey) return; // No key → fallback is fine, skip fetch
-
   try {
     const headers = {};
     if (settings.apiKey) headers['x-api-key'] = settings.apiKey;
@@ -84,36 +88,33 @@ async function _loadModelsBackground() {
 
     const res = await fetch('/api/models', { headers });
     if (!res.ok) return;
-
     const data = await res.json();
     const models = data.models || [];
     if (!models.length) return;
 
-    // Only swap if we got more/different models than the fallback
     if (models.length > FALLBACK_MODELS.length || data.source === 'bedrock') {
-      console.log(`[models] Live list loaded: ${models.length} models (${data.source})`);
+      console.log(`[models] Live list: ${models.length} (${data.source})`);
       _populateModelSelect(models);
+      // Re-apply thinking state after model swap to ensure budget/max is correct
+      applyThinkingState();
     }
   } catch (e) {
-    // Silently ignore — fallback list stays
     console.warn('[models] Background fetch failed, using fallback:', e.message);
   }
 }
 
-// ─── Public loadModels (called from settings when credentials change) ──────
 async function loadModels() {
   try {
     const headers = {};
     if (settings.apiKey) headers['x-api-key'] = settings.apiKey;
     if (settings.region) headers['x-region']  = settings.region;
-
     const res = await fetch('/api/models', { headers });
     const data = await res.json();
     const models = data.models || [];
-
     if (models.length) {
       _populateModelSelect(models);
-      console.log(`[models] Reloaded: ${models.length} models`);
+      applyThinkingState();
+      console.log(`[models] Reloaded: ${models.length}`);
     }
   } catch (e) {
     console.error('loadModels:', e);
