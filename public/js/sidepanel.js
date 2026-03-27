@@ -1,4 +1,5 @@
 // public/js/sidepanel.js — FULL REPLACEMENT
+// highlight.js runs in a Web Worker — zero main-thread blocking
 
 const _langBadgeColours = {
   js:'#f7df1e',javascript:'#f7df1e',ts:'#3178c6',typescript:'#3178c6',
@@ -13,27 +14,118 @@ let _liveSidePanelInfo = null;
 let _wrapOn            = true;
 let _liveUpdateTimer   = null;
 
-// ─── Virtual scroll state ──────────────────────────────────────────────────
-const VS_ROW_H  = 21.45;  // 13px * 1.65 line-height
+// ═══════════════════════════════════════════════════════════════════════════
+// WEB WORKER — hljs runs off the main thread
+// ═══════════════════════════════════════════════════════════════════════════
+
+let _worker       = null;
+let _workerReady  = false;
+let _workerQueue  = [];   // { code, lang, hash, resolve }
+let _workerBusy   = false;
+
+function _getWorker() {
+  if (_worker) return _worker;
+
+  const src = `
+importScripts('https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js');
+
+onmessage = function(e) {
+  const { code, lang, hash } = e.data;
+  let html;
+  try {
+    html = self.hljs.highlight(code, {
+      language: lang && self.hljs.getLanguage(lang) ? lang : 'plaintext',
+      ignoreIllegals: true
+    }).value;
+  } catch(_) {
+    try { html = self.hljs.highlightAuto(code).value; }
+    catch(__) {
+      html = code
+        .replace(/&/g,'&amp;')
+        .replace(/</g,'&lt;')
+        .replace(/>/g,'&gt;');
+    }
+  }
+  postMessage({ html, hash });
+};`;
+
+  const blob = new Blob([src], { type: 'text/javascript' });
+  _worker = new Worker(URL.createObjectURL(blob));
+
+  _worker.onmessage = function(e) {
+    _workerBusy = false;
+    const { html, hash } = e.data;
+
+    // Find the pending request for this hash
+    const idx = _workerQueue.findIndex(q => q.hash === hash);
+    if (idx !== -1) {
+      const req = _workerQueue.splice(idx, 1)[0];
+      req.resolve(html);
+    }
+
+    // Process next in queue
+    _workerFlush();
+  };
+
+  _worker.onerror = function() {
+    _workerBusy = false;
+    _workerReady = false;
+    _workerFlush();
+  };
+
+  _workerReady = true;
+  return _worker;
+}
+
+function _workerFlush() {
+  if (_workerBusy || !_workerQueue.length) return;
+  // Send only the latest request (skip stale ones)
+  const req = _workerQueue[_workerQueue.length - 1];
+  _workerQueue = [req]; // discard all but latest
+  _workerBusy = true;
+  _getWorker().postMessage({ code: req.code, lang: req.lang, hash: req.hash });
+}
+
+function _highlightAsync(code, lang) {
+  return new Promise(resolve => {
+    const hash = _fastHash(code) + '_' + (lang || '');
+    _workerQueue.push({ code, lang, hash, resolve });
+    _workerFlush();
+  });
+}
+
+// Fallback synchronous highlight (used if worker fails)
+function _highlightSync(code, lang) {
+  const tmp = document.createElement('code');
+  tmp.className = lang ? `language-${lang}` : 'language-plaintext';
+  tmp.textContent = code;
+  try { hljs.highlightElement(tmp); } catch(e) {}
+  return tmp.innerHTML;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// VIRTUAL SCROLL
+// ═══════════════════════════════════════════════════════════════════════════
+
+const VS_ROW_H  = 21.45;
 const VS_PAD    = 16;
-const VS_BUFFER = 30;
+const VS_BUFFER = 25;
 
-let _vsLines     = [];
-let _vsCodeHash  = '';
-let _vsLastFirst = -1;
-let _vsLastLast  = -1;
-let _vsRafId     = 0;
-let _vsSuspended = false;  // true while resize is dragging
+let _vsLines      = [];
+let _vsCodeHash   = '';
+let _vsLastFirst  = -1;
+let _vsLastLast   = -1;
+let _vsRafId      = 0;
+let _vsSuspended  = false;
+let _vsPendingCode = null; // code waiting for worker result
 
-// ─── Fast hash ────────────────────────────────────────────────────────────
 function _fastHash(str) {
   let h = 0;
-  const len = Math.min(str.length, 4000); // sample first 4k chars for speed
-  for (let i = 0; i < len; i++) h = ((h << 5) - h + str.charCodeAt(i)) | 0;
+  const n = Math.min(str.length, 8000);
+  for (let i = 0; i < n; i++) h = ((h << 5) - h + str.charCodeAt(i)) | 0;
   return h + '_' + str.length;
 }
 
-// ─── Split highlighted HTML into per-line strings ──────────────────────────
 function _splitHtmlLines(html) {
   const lines = []; let line = '', openTags = [], i = 0;
   while (i < html.length) {
@@ -45,10 +137,10 @@ function _splitHtmlLines(html) {
       else { openTags.pop(); line += tag; }
       i = end + 1;
     } else if (html[i] === '\n') {
-      const closing = openTags.slice().reverse()
+      const cl = openTags.slice().reverse()
         .map(t => '</' + (t.match(/^<([a-zA-Z][a-zA-Z0-9]*)/)?.[1] || 'span') + '>')
         .join('');
-      lines.push(line + closing); line = openTags.join(''); i++;
+      lines.push(line + cl); line = openTags.join(''); i++;
     } else { line += html[i++]; }
   }
   if (line) lines.push(line);
@@ -56,24 +148,8 @@ function _splitHtmlLines(html) {
   return lines;
 }
 
-// ─── Highlight once and cache ──────────────────────────────────────────────
-function _vsHighlight(code, lang) {
-  const hash = _fastHash(code);
-  if (hash === _vsCodeHash) return;
-  _vsCodeHash  = hash;
-  _vsLastFirst = -1;
-  _vsLastLast  = -1;
-
-  const tmp = document.createElement('code');
-  tmp.className = lang ? `language-${lang}` : 'language-plaintext';
-  tmp.textContent = code;
-  try { hljs.highlightElement(tmp); } catch (e) {}
-  _vsLines = _splitHtmlLines(tmp.innerHTML);
-}
-
-// ─── Write DOM only when visible range changes ─────────────────────────────
 function _vsRenderWindow() {
-  if (_vsSuspended) return;  // skip ALL writes during resize drag
+  if (_vsSuspended) return;
 
   const body      = document.getElementById('sidePanelBody');
   const container = document.getElementById('spCodeWrap');
@@ -86,79 +162,82 @@ function _vsRenderWindow() {
   const first = Math.max(0, Math.floor((scrollTop - VS_PAD) / VS_ROW_H) - VS_BUFFER);
   const last  = Math.min(total - 1, Math.ceil((scrollTop + clientHeight - VS_PAD) / VS_ROW_H) + VS_BUFFER);
 
-  // Skip DOM write if range unchanged
-  if (first === _vsLastFirst && last === _vsLastLast) return;
+  if (first === _vsLastFirst && last === _vsLastLast) return; // no change
   _vsLastFirst = first;
   _vsLastLast  = last;
 
   const topH    = VS_PAD + first * VS_ROW_H;
   const bottomH = Math.max(0, (total - 1 - last) * VS_ROW_H + VS_PAD);
 
-  const parts = [];
-  parts.push('<table class="sp-code-table"><tbody>');
-  if (topH > 0) parts.push(
-    `<tr class="sp-spacer"><td colspan="2" style="height:${topH.toFixed(1)}px"></td></tr>`
-  );
+  const parts = ['<table class="sp-code-table"><tbody>'];
+  if (topH > 0) parts.push(`<tr class="sp-spacer"><td colspan="2" style="height:${topH.toFixed(1)}px"></td></tr>`);
   for (let i = first; i <= last; i++) {
-    parts.push(
-      `<tr class="sp-line"><td class="sp-line-num">${i + 1}</td>` +
-      `<td class="sp-line-code">${_vsLines[i] || '\u200B'}</td></tr>`
-    );
+    parts.push(`<tr class="sp-line"><td class="sp-line-num">${i + 1}</td><td class="sp-line-code">${_vsLines[i] || '\u200B'}</td></tr>`);
   }
-  if (bottomH > 0) parts.push(
-    `<tr class="sp-spacer"><td colspan="2" style="height:${bottomH.toFixed(1)}px"></td></tr>`
-  );
+  if (bottomH > 0) parts.push(`<tr class="sp-spacer"><td colspan="2" style="height:${bottomH.toFixed(1)}px"></td></tr>`);
   parts.push('</tbody></table>');
 
   container.innerHTML = parts.join('');
 }
 
-// ─── Schedule via rAF (one pending at a time) ─────────────────────────────
 function _vsScheduleRender() {
   if (_vsRafId || _vsSuspended) return;
-  _vsRafId = requestAnimationFrame(() => {
-    _vsRafId = 0;
-    _vsRenderWindow();
-  });
+  _vsRafId = requestAnimationFrame(() => { _vsRafId = 0; _vsRenderWindow(); });
 }
 
-// ─── Cancel any pending rAF ───────────────────────────────────────────────
 function _vsCancelRender() {
   if (_vsRafId) { cancelAnimationFrame(_vsRafId); _vsRafId = 0; }
 }
 
-// ─── Pause/resume rendering during resize ─────────────────────────────────
-function _vsSuspendRendering() {
-  _vsSuspended = true;
-  _vsCancelRender();
-}
-
+function _vsSuspendRendering() { _vsSuspended = true; _vsCancelRender(); }
 function _vsResumeRendering() {
-  _vsSuspended  = false;
-  _vsLastFirst  = -1;   // force fresh render on resume
-  _vsLastLast   = -1;
+  _vsSuspended = false;
+  _vsLastFirst = -1; _vsLastLast = -1;
   _vsScheduleRender();
 }
 
-// ─── Main render entry ─────────────────────────────────────────────────────
-function _renderSidePanelCode(code, lang) {
+function _vsSetLines(htmlLines) {
+  _vsLines     = htmlLines;
+  _vsLastFirst = -1;
+  _vsLastLast  = -1;
+
+  const container = document.getElementById('spCodeWrap');
+  if (container) {
+    container.style.height = (VS_PAD + _vsLines.length * VS_ROW_H + VS_PAD).toFixed(1) + 'px';
+  }
+}
+
+// ─── Main render entry — async (worker) with sync fallback ────────────────
+async function _renderSidePanelCode(code, lang) {
   const body = document.getElementById('sidePanelBody');
   if (!body) return;
+
+  const hash = _fastHash(code) + '_' + (lang || '');
+  if (hash === _vsCodeHash) return; // same content, skip entirely
+  _vsCodeHash = hash;
 
   const savedTop    = body.scrollTop;
   const savedLeft   = body.scrollLeft;
   const wasAtBottom = (body.scrollHeight - body.scrollTop - body.clientHeight) < 20;
 
-  _vsHighlight(code, lang);
-
-  // Set exact container height for correct scrollbar
+  // Show line count immediately while async highlight runs
+  const lineCount = code.split('\n').length;
   const container = document.getElementById('spCodeWrap');
   if (container) {
-    container.style.height = (VS_PAD + _vsLines.length * VS_ROW_H + VS_PAD).toFixed(1) + 'px';
+    container.style.height = (VS_PAD + lineCount * VS_ROW_H + VS_PAD).toFixed(1) + 'px';
   }
 
-  _vsLastFirst = -1;
-  _vsLastLast  = -1;
+  let highlighted;
+  try {
+    highlighted = await _highlightAsync(code, lang);
+  } catch (e) {
+    highlighted = _highlightSync(code, lang);
+  }
+
+  // If code changed while we were waiting, discard this result
+  if (hash !== _vsCodeHash) return;
+
+  _vsSetLines(_splitHtmlLines(highlighted));
   _vsRenderWindow();
 
   if (wasAtBottom) {
@@ -172,15 +251,6 @@ function _renderSidePanelCode(code, lang) {
   }
 }
 
-// ─── Init virtual scroll listener (once) ──────────────────────────────────
-let _vsScrollBound = false;
-function _initVirtualScroll() {
-  if (_vsScrollBound) return;
-  _vsScrollBound = true;
-  const body = document.getElementById('sidePanelBody');
-  if (body) body.addEventListener('scroll', _vsScheduleRender, { passive: true });
-}
-
 // ─── Wrap state ────────────────────────────────────────────────────────────
 function _applyWrapState() {
   const body = document.getElementById('sidePanelBody');
@@ -189,6 +259,15 @@ function _applyWrapState() {
   body.classList.toggle('wrap-on', _wrapOn);
   btn.classList.toggle('active', _wrapOn);
   btn.textContent = _wrapOn ? '↵ Wrap: on' : '↵ Wrap';
+}
+
+// ─── Init scroll listener (once) ──────────────────────────────────────────
+let _vsScrollBound = false;
+function _initVirtualScroll() {
+  if (_vsScrollBound) return;
+  _vsScrollBound = true;
+  const body = document.getElementById('sidePanelBody');
+  if (body) body.addEventListener('scroll', _vsScheduleRender, { passive: true });
 }
 
 // ─── Open ──────────────────────────────────────────────────────────────────
@@ -201,20 +280,19 @@ function openSidePanel(code, lang, filename, streamInfo) {
   langEl.textContent = spLang.toUpperCase();
   const colour = _langBadgeColours[spLang.toLowerCase()];
   if (colour) {
-    langEl.style.color      = colour;
+    langEl.style.color = colour;
     langEl.style.background = colour + '1a';
-    langEl.style.border     = '1px solid ' + colour + '48';
-  } else {
-    langEl.style.color = langEl.style.background = langEl.style.border = '';
-  }
+    langEl.style.border = '1px solid ' + colour + '48';
+  } else { langEl.style.color = langEl.style.background = langEl.style.border = ''; }
 
   document.getElementById('spCopyBtn').textContent = 'Copy';
   document.getElementById('spCopyBtn').classList.remove('success');
 
   _applyWrapState();
   _initVirtualScroll();
+  _getWorker(); // warm up worker early
 
-  _vsCodeHash  = '';   // force fresh highlight
+  _vsCodeHash = ''; // force fresh highlight
   _renderSidePanelCode(code, spLang);
 
   const panel = document.getElementById('sidePanel');
@@ -227,7 +305,7 @@ function openSidePanel(code, lang, filename, streamInfo) {
   });
 }
 
-// ─── Live update (throttled to 400ms) ─────────────────────────────────────
+// ─── Live update (throttled) ───────────────────────────────────────────────
 function updateLiveSidePanel(container, msgId) {
   if (!_liveSidePanelInfo || _liveSidePanelInfo.msgId !== msgId) return;
   if (!document.getElementById('sidePanel').classList.contains('open')) {
@@ -237,7 +315,7 @@ function updateLiveSidePanel(container, msgId) {
   _liveUpdateTimer = setTimeout(() => {
     _liveUpdateTimer = null;
     _doLiveUpdate(container, msgId);
-  }, 400);
+  }, 500);
 }
 
 function _doLiveUpdate(container, msgId) {
@@ -257,12 +335,10 @@ function clearLiveSidePanelFor(msgId) {
 // ─── Close ─────────────────────────────────────────────────────────────────
 function closeSidePanel() {
   const panel = document.getElementById('sidePanel');
-  panel.classList.remove('open');
-  panel.style.width = '';
+  panel.classList.remove('open'); panel.style.width = '';
   _liveSidePanelInfo = null;
   _vsLines = []; _vsCodeHash = ''; _vsLastFirst = -1; _vsLastLast = -1;
-  _vsSuspended = false;
-  _vsCancelRender();
+  _vsSuspended = false; _vsCancelRender();
   if (_liveUpdateTimer) { clearTimeout(_liveUpdateTimer); _liveUpdateTimer = null; }
 }
 
@@ -275,10 +351,8 @@ function copySidePanel() {
 }
 function downloadSidePanel() { downloadCode(spCode, spLang, spFilename); }
 function toggleSidePanelWrap() {
-  _wrapOn = !_wrapOn;
-  _applyWrapState();
-  _vsLastFirst = -1; _vsLastLast = -1;
-  _vsScheduleRender();
+  _wrapOn = !_wrapOn; _applyWrapState();
+  _vsLastFirst = -1; _vsLastLast = -1; _vsScheduleRender();
 }
 
 // ─── Resize handle ─────────────────────────────────────────────────────────
@@ -288,74 +362,48 @@ function _initSidePanelResize() {
   if (!handle || !panel) return;
 
   let startX = 0, startW = 0, dragging = false;
-  const MIN_W       = 280;
-  const getMaxW     = () => Math.min(Math.floor(window.innerWidth * 0.75), window.innerWidth - 400);
+  const MIN_W = 280;
+  const getMaxW = () => Math.min(Math.floor(window.innerWidth * 0.75), window.innerWidth - 400);
   const isMobileView = () => window.innerWidth <= 768;
 
-  // ── Mouse ────────────────────────────────────────────────────────────
-  handle.addEventListener('mousedown', function(e) {
-    if (isMobileView()) return;
-    e.preventDefault();
-    dragging = true;
-    startX   = e.clientX;
-    startW   = panel.offsetWidth;
-    handle.classList.add('dragging');
-    panel.classList.add('no-transition');
-    document.body.style.cursor     = 'col-resize';
-    document.body.style.userSelect = 'none';
-
-    // Suspend virtual scroll rendering for the duration of the drag
+  handle.addEventListener('mousedown', e => {
+    if (isMobileView()) return; e.preventDefault();
+    dragging = true; startX = e.clientX; startW = panel.offsetWidth;
+    handle.classList.add('dragging'); panel.classList.add('no-transition');
+    document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none';
     _vsSuspendRendering();
   });
 
-  document.addEventListener('mousemove', function(e) {
+  document.addEventListener('mousemove', e => {
     if (!dragging) return;
-    // Only update the CSS width — no content re-render
-    const newW = Math.max(MIN_W, Math.min(getMaxW(), startW + (startX - e.clientX)));
-    panel.style.width = newW + 'px';
+    panel.style.width = Math.max(MIN_W, Math.min(getMaxW(), startW + (startX - e.clientX))) + 'px';
   });
 
-  document.addEventListener('mouseup', function() {
-    if (!dragging) return;
-    dragging = false;
-    handle.classList.remove('dragging');
-    panel.classList.remove('no-transition');
-    document.body.style.cursor     = '';
-    document.body.style.userSelect = '';
-
-    // Resume and render once now that drag is done
+  document.addEventListener('mouseup', () => {
+    if (!dragging) return; dragging = false;
+    handle.classList.remove('dragging'); panel.classList.remove('no-transition');
+    document.body.style.cursor = ''; document.body.style.userSelect = '';
     _vsResumeRendering();
   });
 
-  // ── Touch ────────────────────────────────────────────────────────────
-  handle.addEventListener('touchstart', function(e) {
+  handle.addEventListener('touchstart', e => {
     if (isMobileView()) return;
-    dragging = true;
-    startX   = e.touches[0].clientX;
-    startW   = panel.offsetWidth;
-    panel.classList.add('no-transition');
-    _vsSuspendRendering();
+    dragging = true; startX = e.touches[0].clientX; startW = panel.offsetWidth;
+    panel.classList.add('no-transition'); _vsSuspendRendering();
   }, { passive: true });
 
-  document.addEventListener('touchmove', function(e) {
+  document.addEventListener('touchmove', e => {
     if (!dragging) return;
-    const newW = Math.max(MIN_W, Math.min(getMaxW(), startW + (startX - e.touches[0].clientX)));
-    panel.style.width = newW + 'px';
+    panel.style.width = Math.max(MIN_W, Math.min(getMaxW(), startW + (startX - e.touches[0].clientX))) + 'px';
   }, { passive: true });
 
-  document.addEventListener('touchend', function() {
-    if (!dragging) return;
-    dragging = false;
-    panel.classList.remove('no-transition');
-    _vsResumeRendering();
+  document.addEventListener('touchend', () => {
+    if (!dragging) return; dragging = false;
+    panel.classList.remove('no-transition'); _vsResumeRendering();
   });
 
-  _applyWrapState();
-  _initVirtualScroll();
+  _applyWrapState(); _initVirtualScroll();
 }
 
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', _initSidePanelResize);
-} else {
-  _initSidePanelResize();
-}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _initSidePanelResize);
+else _initSidePanelResize();

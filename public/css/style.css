@@ -43,6 +43,49 @@
   --sp-gutter-w: 44px;
 }
 
+
+/* ─── PERFORMANCE: CSS containment stops reflows crossing boundaries ─────── */
+
+/* Messages area: changes inside never reflow the sidebar or topbar */
+.messages {
+  contain: strict;
+  will-change: scroll-position;
+}
+
+/* Each message is isolated — one message reflow doesn't affect others */
+.msg-row {
+  contain: layout style;
+}
+
+/* Side panel body: completely isolated scroll container */
+.side-panel-body {
+  contain: strict;
+  will-change: scroll-position;
+}
+
+/* Side panel code container */
+#spCodeWrap {
+  contain: layout size;
+}
+
+/* Code blocks isolated */
+.stream-wrap {
+  contain: layout style;
+}
+
+/* Chat list isolated */
+.chat-list {
+  contain: strict;
+  will-change: scroll-position;
+}
+
+/* Topbar never reflows due to content changes */
+.topbar {
+  contain: layout style size;
+}
+
+
+
 html, body {
   height: 100%; overflow: hidden;
   background: var(--bg0); color: var(--text0);
