@@ -4,3 +4,6 @@ node_modules/
 .env
 .env.*
 !.env.example
+push-env-to-heroku.js
+models.json
+list-models.js
