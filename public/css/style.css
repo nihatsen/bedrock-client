@@ -43,6 +43,16 @@
   --sp-gutter-w: 44px;
 }
 
+/* ─── PERFORMANCE: CSS containment — isolate reflows ─────────────────────── */
+.messages        { contain: strict; will-change: scroll-position; }
+.msg-row         { contain: layout style; }
+.side-panel-body { contain: strict; will-change: scroll-position; }
+#spCodeWrap      { contain: layout size; }
+.stream-wrap     { contain: layout style; }
+.chat-list       { contain: strict; will-change: scroll-position; }
+.topbar          { contain: layout style size; }
+.sidebar         { contain: layout style; }
+.input-area      { contain: layout style; }
 
 /* ─── PERFORMANCE: CSS containment stops reflows crossing boundaries ─────── */
 

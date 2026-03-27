@@ -1,16 +1,80 @@
-// public/js/messages.js  — FULL REPLACEMENT
+// public/js/messages.js — FULL REPLACEMENT
+// Markdown render cache + batch rendering for fast chat switching
 
-// ═══════════════════════════════════════════════════════════════════════════
-// MESSAGES — Render, append, finalize, edit, delete, retry
-// ═══════════════════════════════════════════════════════════════════════════
+// ─── Markdown render cache ─────────────────────────────────────────────────
+// Key: msgId, Value: rendered HTML string
+// Avoids re-running marked.parse() on every chat switch
+const _mdCache = new Map();
+const _MD_CACHE_MAX = 500; // max entries before LRU trim
 
+function _cachedRenderMd(msgId, text) {
+  if (!text) return '';
+  const cached = _mdCache.get(msgId);
+  if (cached !== undefined) return cached;
+  const html = renderMd(text);
+  _mdCache.set(msgId, html);
+  // Trim cache if too large
+  if (_mdCache.size > _MD_CACHE_MAX) {
+    const firstKey = _mdCache.keys().next().value;
+    _mdCache.delete(firstKey);
+  }
+  return html;
+}
+
+function invalidateMdCache(msgId) { _mdCache.delete(msgId); }
+function clearMdCache() { _mdCache.clear(); }
+
+// ─── renderMessages: batch-render for large chats ─────────────────────────
 function renderMessages(messages, activeStreamId = null) {
   const wrap = document.getElementById('messagesWrap');
+
+  // Remove old message rows but keep emptyState
   wrap.querySelectorAll('.msg-row').forEach(r => r.remove());
+
   const empty = document.getElementById('emptyState');
   if (!messages.length) { empty.style.display = ''; return; }
   empty.style.display = 'none';
-  messages.forEach(m => appendMsgEl(m, m.id === activeStreamId));
+
+  if (messages.length <= 20) {
+    // Small chat: render synchronously
+    messages.forEach(m => appendMsgEl(m, m.id === activeStreamId));
+  } else {
+    // Large chat: render first 20 immediately, rest in idle batches
+    const FIRST_BATCH = 20;
+    const BATCH_SIZE  = 15;
+
+    for (let i = 0; i < FIRST_BATCH && i < messages.length; i++) {
+      appendMsgEl(messages[i], messages[i].id === activeStreamId);
+    }
+
+    if (messages.length > FIRST_BATCH) {
+      _batchRender(messages, FIRST_BATCH, BATCH_SIZE, activeStreamId, wrap);
+    }
+  }
+}
+
+function _batchRender(messages, startIdx, batchSize, activeStreamId, wrap) {
+  if (startIdx >= messages.length) return;
+
+  const idle = window.requestIdleCallback || (fn => setTimeout(fn, 1));
+
+  idle(deadline => {
+    let i = startIdx;
+    // Process as many as time allows (or one batch if no deadline API)
+    while (i < messages.length) {
+      const timeLeft = deadline.timeRemaining ? deadline.timeRemaining() : 5;
+      if (timeLeft < 1 && i > startIdx) break; // yield back
+
+      appendMsgEl(messages[i], messages[i].id === activeStreamId);
+      i++;
+
+      if (i - startIdx >= batchSize) break;
+    }
+
+    if (i < messages.length) {
+      _batchRender(messages, i, batchSize, activeStreamId, wrap);
+    }
+  }, { timeout: 100 });
 }
 
 function appendMsgEl(msg, isStreaming = false) {
@@ -29,9 +93,7 @@ function appendMsgEl(msg, isStreaming = false) {
   header.innerHTML = `
     <span class="role-badge">${msg.role === 'user' ? '👤 You' : `◈ ${esc(modelLabel)}`}</span>
     <span class="msg-time">${fmtTime(msg.createdAt)}</span>
-    ${msg.usage
-      ? `<span class="msg-usage">${msg.usage.inputTokens||0}↑ ${msg.usage.outputTokens||0}↓</span>`
-      : ''}`;
+    ${msg.usage ? `<span class="msg-usage">${msg.usage.inputTokens||0}↑ ${msg.usage.outputTokens||0}↓</span>` : ''}`;
 
   const actions = document.createElement('div');
   actions.className = 'msg-actions';
@@ -80,9 +142,7 @@ function appendMsgEl(msg, isStreaming = false) {
       }
       const chip = document.createElement('div');
       chip.className = 'file-chip';
-      chip.innerHTML = `
-        <span class="file-chip-name">${esc(f.name)}</span>
-        <span class="file-chip-size">${fmtSize(f.size)}</span>`;
+      chip.innerHTML = `<span class="file-chip-name">${esc(f.name)}</span><span class="file-chip-size">${fmtSize(f.size)}</span>`;
       chips.appendChild(chip);
     });
     body.appendChild(chips);
@@ -96,7 +156,8 @@ function appendMsgEl(msg, isStreaming = false) {
   } else if (msg.role === 'assistant') {
     if (isStreaming) {
       if (msg.text) {
-        textEl.innerHTML = renderMd(msg.text);
+        // Use cache for streaming too (partial render is fine)
+        textEl.innerHTML = _cachedRenderMd(msg.id + '_stream', msg.text);
         hlStreaming(textEl, msg.id, {});
       }
       const indicator = document.createElement('div');
@@ -104,7 +165,8 @@ function appendMsgEl(msg, isStreaming = false) {
       indicator.innerHTML = '<span class="stream-spinner-sm"></span><span class="stream-cursor"></span>';
       textEl.appendChild(indicator);
     } else {
-      textEl.innerHTML = renderMd(msg.text || '');
+      // Use cache — avoids re-running marked.parse on chat switch
+      textEl.innerHTML = _cachedRenderMd(msg.id, msg.text || '');
       requestAnimationFrame(() => processCodeBlocks(textEl, msg.text));
     }
   } else {
@@ -126,7 +188,6 @@ function appendMsgEl(msg, isStreaming = false) {
   row.appendChild(body);
   wrap.appendChild(row);
 
-  // Add file list for finalized assistant messages with code blocks
   if (msg.role === 'assistant' && !isStreaming && !msg._error && msg.text) {
     requestAnimationFrame(() => {
       const fl = buildFileList(body);
@@ -146,10 +207,12 @@ function finalizeMsgEl(msg) {
   const textEl = row.querySelector('.msg-text');
   if (!textEl) return;
 
-  // Remove ALL streaming artifacts
   textEl.querySelector('.stream-indicator')?.remove();
   textEl.querySelector('.stream-cursor')?.remove();
   textEl.querySelector('.stream-spinner-sm')?.remove();
+
+  // Invalidate the streaming partial cache entry
+  _mdCache.delete(msg.id + '_stream');
 
   if (msg._error) {
     textEl.innerHTML = buildErrorHTML(msg._error, msg.id);
@@ -157,7 +220,10 @@ function finalizeMsgEl(msg) {
     return;
   }
 
-  textEl.innerHTML = renderMd(msg.text || '');
+  // Cache final rendered markdown
+  const html = renderMd(msg.text || '');
+  _mdCache.set(msg.id, html);
+  textEl.innerHTML = html;
   processCodeBlocks(textEl, msg.text);
 
   const thinkingEl = body.querySelector('.thinking-block');
@@ -176,22 +242,14 @@ function finalizeMsgEl(msg) {
     if (tb) {
       tb.querySelector('.thinking-cursor')?.remove();
       tb.querySelector('.thinking-progress')?.remove();
-      const h = tb.querySelector('.thinking-header');
-      if (h) {
-        const est = Math.round(msg.thinking.length / 4);
-        h.innerHTML = `
-          <div class="thinking-dot"></div>
-          <span class="thinking-header-text" style="flex:1">REASONING — ${tokStr(est)} est. tokens</span>
-          <svg class="thinking-chevron" width="12" height="12" viewBox="0 0 24 24"
-            fill="none" stroke="currentColor" stroke-width="2.5">
-            <polyline points="6 9 12 15 18 9"/></svg>`;
-        h.onclick = () => tb.classList.toggle('collapsed');
-      }
+      const ic = tb.querySelector('.thinking-spinner');
+      if (ic) ic.className = 'thinking-dot';
+      const sl = tb.querySelector('.thinking-header-text');
+      if (sl) { const est = Math.round(msg.thinking.length / 4); sl.textContent = `REASONING — ${tokStr(est)} est. tokens`; }
       if (!tb.classList.contains('collapsed')) tb.classList.add('collapsed');
     }
   }
 
-  // Build file list after code blocks are processed
   row.querySelector('.file-list')?.remove();
   requestAnimationFrame(() => {
     const fl = buildFileList(body);
@@ -200,20 +258,12 @@ function finalizeMsgEl(msg) {
 }
 
 function buildErrorHTML(err, msgId) {
-  const container = document.createElement('div');
-  container.className = 'msg-error';
-  const errDiv = document.createElement('div');
-  errDiv.className = 'err-text';
-  errDiv.textContent = '⚠ ' + err;
-  container.appendChild(errDiv);
-  const retryBtn = document.createElement('button');
-  retryBtn.className = 'retry-btn';
-  retryBtn.textContent = '↺ Retry';
-  retryBtn.dataset.retryMsgId = msgId;
-  container.appendChild(retryBtn);
-  const tmp = document.createElement('div');
-  tmp.appendChild(container);
-  return tmp.innerHTML;
+  const c = document.createElement('div'); c.className = 'msg-error';
+  const e = document.createElement('div'); e.className = 'err-text'; e.textContent = '⚠ ' + err;
+  const r = document.createElement('button'); r.className = 'retry-btn'; r.textContent = '↺ Retry';
+  r.dataset.retryMsgId = msgId;
+  c.appendChild(e); c.appendChild(r);
+  const t = document.createElement('div'); t.appendChild(c); return t.innerHTML;
 }
 
 document.addEventListener('click', function(e) {
@@ -234,8 +284,7 @@ function editMessage(msgId) {
   const origHTML = textEl.innerHTML;
 
   const ta = document.createElement('textarea');
-  ta.className = 'msg-edit-textarea';
-  ta.value = msg.text || '';
+  ta.className = 'msg-edit-textarea'; ta.value = msg.text || '';
   setTimeout(() => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; }, 0);
   ta.oninput = () => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; };
 
@@ -245,6 +294,7 @@ function editMessage(msgId) {
     const t = ta.value.trim();
     if (!t) { toast('Cannot be empty', 'error'); return; }
     msg.text = t;
+    invalidateMdCache(msgId); // invalidate cache for edited message
     convo.messages.splice(convo.messages.indexOf(msg) + 1);
     saveConvos(); renderMessages(convo.messages);
     runStream(currentConvoId);
@@ -259,24 +309,24 @@ function editMessage(msgId) {
     if (e.key === 'Escape') { e.preventDefault(); cancelBtn.click(); }
   };
 
-  const editWrap = document.createElement('div'); editWrap.className = 'msg-edit-wrap';
+  const wrap = document.createElement('div'); wrap.className = 'msg-edit-wrap';
   const acts = document.createElement('div'); acts.className = 'msg-edit-actions';
   acts.appendChild(saveBtn); acts.appendChild(cancelBtn);
-  editWrap.appendChild(ta); editWrap.appendChild(acts);
-  textEl.innerHTML = ''; textEl.appendChild(editWrap);
+  wrap.appendChild(ta); wrap.appendChild(acts);
+  textEl.innerHTML = ''; textEl.appendChild(wrap);
   ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
 }
 
 function deleteMessagePair(userMsgId) {
   const convo = getConvo(currentConvoId);
-  if (!convo || streamRegistry.has(currentConvoId)) {
-    toast('Stop current response first', 'error'); return;
-  }
+  if (!convo || streamRegistry.has(currentConvoId)) { toast('Stop current response first', 'error'); return; }
   const idx = convo.messages.findIndex(m => m.id === userMsgId);
   if (idx === -1) return;
   const w = document.getElementById('messagesWrap');
   const saved = w.scrollTop;
   const count = convo.messages[idx + 1]?.role === 'assistant' ? 2 : 1;
+  // Invalidate caches
+  convo.messages.slice(idx, idx + count).forEach(m => invalidateMdCache(m.id));
   convo.messages.splice(idx, count);
   saveConvos(); renderMessages(convo.messages);
   requestAnimationFrame(() => { w.scrollTop = saved; });
@@ -284,11 +334,11 @@ function deleteMessagePair(userMsgId) {
 
 function retryMessage(aId) {
   const convo = getConvo(currentConvoId);
-  if (!convo || streamRegistry.has(currentConvoId)) {
-    toast('Stop current response first', 'error'); return;
-  }
+  if (!convo || streamRegistry.has(currentConvoId)) { toast('Stop current response first', 'error'); return; }
   const idx = convo.messages.findIndex(m => m.id === aId);
   if (idx === -1) return;
+  // Invalidate caches for removed messages
+  convo.messages.slice(idx).forEach(m => invalidateMdCache(m.id));
   convo.messages.splice(idx);
   saveConvos(); renderMessages(convo.messages);
   const last = convo.messages[convo.messages.length - 1];
@@ -300,6 +350,4 @@ function openImgViewer(src) {
   document.getElementById('imgModalImg').src = src;
   document.getElementById('imgModal').classList.add('open');
 }
-function closeImgViewer() {
-  document.getElementById('imgModal').classList.remove('open');
-}
+function closeImgViewer() { document.getElementById('imgModal').classList.remove('open'); }

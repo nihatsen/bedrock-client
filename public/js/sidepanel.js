@@ -1,5 +1,5 @@
 // public/js/sidepanel.js — FULL REPLACEMENT
-// highlight.js runs in a Web Worker — zero main-thread blocking
+// Worker does highlight + line-split. Main thread only does virtual DOM writes.
 
 const _langBadgeColours = {
   js:'#f7df1e',javascript:'#f7df1e',ts:'#3178c6',typescript:'#3178c6',
@@ -15,22 +15,36 @@ let _wrapOn            = true;
 let _liveUpdateTimer   = null;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// WEB WORKER — hljs runs off the main thread
+// WORKER — highlight + split lines entirely off main thread
 // ═══════════════════════════════════════════════════════════════════════════
 
-let _worker       = null;
-let _workerReady  = false;
-let _workerQueue  = [];   // { code, lang, hash, resolve }
-let _workerBusy   = false;
-
-function _getWorker() {
-  if (_worker) return _worker;
-
-  const src = `
+const _WORKER_SRC = `
 importScripts('https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js');
 
+function splitHtmlLines(html) {
+  const lines = [];
+  let line = '', openTags = [], i = 0;
+  while (i < html.length) {
+    if (html[i] === '<') {
+      const end = html.indexOf('>', i);
+      if (end === -1) { line += html[i++]; continue; }
+      const tag = html.slice(i, end + 1), isClose = tag.startsWith('</');
+      if (!isClose) { if (!tag.endsWith('/>')) openTags.push(tag); line += tag; }
+      else { openTags.pop(); line += tag; }
+      i = end + 1;
+    } else if (html[i] === '\\n') {
+      const cl = openTags.slice().reverse()
+        .map(t => '</' + (t.match(/^<([a-zA-Z][a-zA-Z0-9]*)/)?.[1]||'span') + '>').join('');
+      lines.push(line + cl); line = openTags.join(''); i++;
+    } else { line += html[i++]; }
+  }
+  if (line) lines.push(line);
+  if (lines.length && lines[lines.length-1] === '') lines.pop();
+  return lines;
+}
+
 onmessage = function(e) {
-  const { code, lang, hash } = e.data;
+  const { code, lang, reqId } = e.data;
   let html;
   try {
     html = self.hljs.highlight(code, {
@@ -39,94 +53,47 @@ onmessage = function(e) {
     }).value;
   } catch(_) {
     try { html = self.hljs.highlightAuto(code).value; }
-    catch(__) {
-      html = code
-        .replace(/&/g,'&amp;')
-        .replace(/</g,'&lt;')
-        .replace(/>/g,'&gt;');
-    }
+    catch(__) { html = code.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
   }
-  postMessage({ html, hash });
+  const lines = splitHtmlLines(html);
+  postMessage({ lines, reqId });
 };`;
 
-  const blob = new Blob([src], { type: 'text/javascript' });
+let _worker      = null;
+let _workerReady = false;
+let _reqCounter  = 0;
+const _pending   = new Map(); // reqId → { resolve, reject }
+let _latestReqId = -1;        // only apply result from latest request
+
+function _getWorker() {
+  if (_worker) return _worker;
+  const blob = new Blob([_WORKER_SRC], { type: 'text/javascript' });
   _worker = new Worker(URL.createObjectURL(blob));
-
-  _worker.onmessage = function(e) {
-    _workerBusy = false;
-    const { html, hash } = e.data;
-
-    // Find the pending request for this hash
-    const idx = _workerQueue.findIndex(q => q.hash === hash);
-    if (idx !== -1) {
-      const req = _workerQueue.splice(idx, 1)[0];
-      req.resolve(html);
-    }
-
-    // Process next in queue
-    _workerFlush();
+  _worker.onmessage = e => {
+    const { lines, reqId } = e.data;
+    const p = _pending.get(reqId);
+    _pending.delete(reqId);
+    // Only resolve if this is the latest request (discard stale)
+    if (p && reqId === _latestReqId) p.resolve(lines);
+    else if (p) p.reject(new Error('stale'));
   };
-
-  _worker.onerror = function() {
-    _workerBusy = false;
-    _workerReady = false;
-    _workerFlush();
+  _worker.onerror = () => {
+    _pending.forEach(p => p.reject(new Error('worker error')));
+    _pending.clear();
+    _worker = null; _workerReady = false;
   };
-
   _workerReady = true;
   return _worker;
 }
 
-function _workerFlush() {
-  if (_workerBusy || !_workerQueue.length) return;
-  // Send only the latest request (skip stale ones)
-  const req = _workerQueue[_workerQueue.length - 1];
-  _workerQueue = [req]; // discard all but latest
-  _workerBusy = true;
-  _getWorker().postMessage({ code: req.code, lang: req.lang, hash: req.hash });
-}
-
-function _highlightAsync(code, lang) {
-  return new Promise(resolve => {
-    const hash = _fastHash(code) + '_' + (lang || '');
-    _workerQueue.push({ code, lang, hash, resolve });
-    _workerFlush();
-  });
-}
-
-// Fallback synchronous highlight (used if worker fails)
-function _highlightSync(code, lang) {
+// Fallback sync split+highlight
+function _syncHighlightAndSplit(code, lang) {
   const tmp = document.createElement('code');
   tmp.className = lang ? `language-${lang}` : 'language-plaintext';
   tmp.textContent = code;
   try { hljs.highlightElement(tmp); } catch(e) {}
-  return tmp.innerHTML;
-}
+  const html = tmp.innerHTML;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// VIRTUAL SCROLL
-// ═══════════════════════════════════════════════════════════════════════════
-
-const VS_ROW_H  = 21.45;
-const VS_PAD    = 16;
-const VS_BUFFER = 25;
-
-let _vsLines      = [];
-let _vsCodeHash   = '';
-let _vsLastFirst  = -1;
-let _vsLastLast   = -1;
-let _vsRafId      = 0;
-let _vsSuspended  = false;
-let _vsPendingCode = null; // code waiting for worker result
-
-function _fastHash(str) {
-  let h = 0;
-  const n = Math.min(str.length, 8000);
-  for (let i = 0; i < n; i++) h = ((h << 5) - h + str.charCodeAt(i)) | 0;
-  return h + '_' + str.length;
-}
-
-function _splitHtmlLines(html) {
   const lines = []; let line = '', openTags = [], i = 0;
   while (i < html.length) {
     if (html[i] === '<') {
@@ -138,46 +105,90 @@ function _splitHtmlLines(html) {
       i = end + 1;
     } else if (html[i] === '\n') {
       const cl = openTags.slice().reverse()
-        .map(t => '</' + (t.match(/^<([a-zA-Z][a-zA-Z0-9]*)/)?.[1] || 'span') + '>')
-        .join('');
+        .map(t => '</' + (t.match(/^<([a-zA-Z][a-zA-Z0-9]*)/)?.[1]||'span') + '>').join('');
       lines.push(line + cl); line = openTags.join(''); i++;
     } else { line += html[i++]; }
   }
   if (line) lines.push(line);
-  if (lines.length && lines[lines.length - 1] === '') lines.pop();
+  if (lines.length && lines[lines.length-1] === '') lines.pop();
   return lines;
 }
 
+function _processAsync(code, lang) {
+  return new Promise((resolve, reject) => {
+    const reqId = ++_reqCounter;
+    _latestReqId = reqId;
+    // Cancel all older pending requests (they're stale)
+    _pending.forEach((p, id) => { if (id < reqId) { p.reject(new Error('stale')); _pending.delete(id); } });
+    _pending.set(reqId, { resolve, reject });
+    try {
+      _getWorker().postMessage({ code, lang, reqId });
+    } catch(e) {
+      _pending.delete(reqId);
+      reject(e);
+    }
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// VIRTUAL SCROLL
+// ═══════════════════════════════════════════════════════════════════════════
+
+const VS_ROW_H  = 21.45;
+const VS_PAD    = 16;
+const VS_BUFFER = 25;
+
+let _vsLines     = [];
+let _vsHash      = '';
+let _vsLastFirst = -1;
+let _vsLastLast  = -1;
+let _vsRafId     = 0;
+let _vsSuspended = false;
+
+function _fastHash(s) {
+  let h = 0;
+  const n = Math.min(s.length, 8000);
+  for (let i = 0; i < n; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+  return h + '_' + s.length;
+}
+
+// Only write to DOM when visible range actually changes
 function _vsRenderWindow() {
   if (_vsSuspended) return;
+  const body = document.getElementById('sidePanelBody');
+  const wrap = document.getElementById('spCodeWrap');
+  if (!body || !wrap || !_vsLines.length) return;
 
-  const body      = document.getElementById('sidePanelBody');
-  const container = document.getElementById('spCodeWrap');
-  if (!body || !container || !_vsLines.length) return;
-
-  const scrollTop    = body.scrollTop;
-  const clientHeight = body.clientHeight;
-  const total        = _vsLines.length;
+  const scrollTop = body.scrollTop;
+  const clientH   = body.clientHeight;
+  const total     = _vsLines.length;
 
   const first = Math.max(0, Math.floor((scrollTop - VS_PAD) / VS_ROW_H) - VS_BUFFER);
-  const last  = Math.min(total - 1, Math.ceil((scrollTop + clientHeight - VS_PAD) / VS_ROW_H) + VS_BUFFER);
+  const last  = Math.min(total - 1, Math.ceil((scrollTop + clientH - VS_PAD) / VS_ROW_H) + VS_BUFFER);
 
-  if (first === _vsLastFirst && last === _vsLastLast) return; // no change
+  if (first === _vsLastFirst && last === _vsLastLast) return;
   _vsLastFirst = first;
   _vsLastLast  = last;
 
-  const topH    = VS_PAD + first * VS_ROW_H;
-  const bottomH = Math.max(0, (total - 1 - last) * VS_ROW_H + VS_PAD);
+  const topH    = (VS_PAD + first * VS_ROW_H).toFixed(1);
+  const bottomH = Math.max(0, (total - 1 - last) * VS_ROW_H + VS_PAD).toFixed(1);
 
-  const parts = ['<table class="sp-code-table"><tbody>'];
-  if (topH > 0) parts.push(`<tr class="sp-spacer"><td colspan="2" style="height:${topH.toFixed(1)}px"></td></tr>`);
+  // Build HTML with pre-allocated array
+  const count  = last - first + 1;
+  const parts  = new Array(count + 4);
+  let   pi     = 0;
+
+  parts[pi++] = '<table class="sp-code-table"><tbody>';
+  if (+topH > 0) parts[pi++] = `<tr class="sp-spacer"><td colspan="2" style="height:${topH}px"></td></tr>`;
+
   for (let i = first; i <= last; i++) {
-    parts.push(`<tr class="sp-line"><td class="sp-line-num">${i + 1}</td><td class="sp-line-code">${_vsLines[i] || '\u200B'}</td></tr>`);
+    parts[pi++] = `<tr class="sp-line"><td class="sp-line-num">${i + 1}</td><td class="sp-line-code">${_vsLines[i] || '\u200B'}</td></tr>`;
   }
-  if (bottomH > 0) parts.push(`<tr class="sp-spacer"><td colspan="2" style="height:${bottomH.toFixed(1)}px"></td></tr>`);
-  parts.push('</tbody></table>');
 
-  container.innerHTML = parts.join('');
+  if (+bottomH > 0) parts[pi++] = `<tr class="sp-spacer"><td colspan="2" style="height:${bottomH}px"></td></tr>`;
+  parts[pi++] = '</tbody></table>';
+
+  wrap.innerHTML = parts.slice(0, pi).join('');
 }
 
 function _vsScheduleRender() {
@@ -196,48 +207,41 @@ function _vsResumeRendering() {
   _vsScheduleRender();
 }
 
-function _vsSetLines(htmlLines) {
-  _vsLines     = htmlLines;
-  _vsLastFirst = -1;
-  _vsLastLast  = -1;
-
-  const container = document.getElementById('spCodeWrap');
-  if (container) {
-    container.style.height = (VS_PAD + _vsLines.length * VS_ROW_H + VS_PAD).toFixed(1) + 'px';
-  }
-}
-
-// ─── Main render entry — async (worker) with sync fallback ────────────────
+// ─── Render entry: async worker path with sync fallback ────────────────────
 async function _renderSidePanelCode(code, lang) {
   const body = document.getElementById('sidePanelBody');
   if (!body) return;
 
-  const hash = _fastHash(code) + '_' + (lang || '');
-  if (hash === _vsCodeHash) return; // same content, skip entirely
-  _vsCodeHash = hash;
+  const hash = _fastHash(code) + (lang || '');
+  if (hash === _vsHash) return;
+  _vsHash = hash;
 
   const savedTop    = body.scrollTop;
   const savedLeft   = body.scrollLeft;
   const wasAtBottom = (body.scrollHeight - body.scrollTop - body.clientHeight) < 20;
 
-  // Show line count immediately while async highlight runs
-  const lineCount = code.split('\n').length;
-  const container = document.getElementById('spCodeWrap');
-  if (container) {
-    container.style.height = (VS_PAD + lineCount * VS_ROW_H + VS_PAD).toFixed(1) + 'px';
-  }
+  // Set container height immediately (gives correct scrollbar before highlight)
+  const rawLineCount = code.split('\n').length;
+  const wrap = document.getElementById('spCodeWrap');
+  if (wrap) wrap.style.height = (VS_PAD + rawLineCount * VS_ROW_H + VS_PAD).toFixed(1) + 'px';
 
-  let highlighted;
+  let lines;
   try {
-    highlighted = await _highlightAsync(code, lang);
+    lines = await _processAsync(code, lang);
   } catch (e) {
-    highlighted = _highlightSync(code, lang);
+    if (e.message === 'stale') return; // newer request in flight
+    lines = _syncHighlightAndSplit(code, lang);
   }
 
-  // If code changed while we were waiting, discard this result
-  if (hash !== _vsCodeHash) return;
+  // Another request may have started while we awaited — check hash
+  if (hash !== _vsHash) return;
 
-  _vsSetLines(_splitHtmlLines(highlighted));
+  _vsLines     = lines;
+  _vsLastFirst = -1;
+  _vsLastLast  = -1;
+
+  if (wrap) wrap.style.height = (VS_PAD + lines.length * VS_ROW_H + VS_PAD).toFixed(1) + 'px';
+
   _vsRenderWindow();
 
   if (wasAtBottom) {
@@ -261,7 +265,6 @@ function _applyWrapState() {
   btn.textContent = _wrapOn ? '↵ Wrap: on' : '↵ Wrap';
 }
 
-// ─── Init scroll listener (once) ──────────────────────────────────────────
 let _vsScrollBound = false;
 function _initVirtualScroll() {
   if (_vsScrollBound) return;
@@ -276,23 +279,24 @@ function openSidePanel(code, lang, filename, streamInfo) {
   spCode = code; spLang = lang || 'text'; spFilename = filename || langToFilename(lang);
 
   document.getElementById('sidePanelTitle').textContent = spFilename;
+
   const langEl = document.getElementById('sidePanelLang');
   langEl.textContent = spLang.toUpperCase();
   const colour = _langBadgeColours[spLang.toLowerCase()];
   if (colour) {
-    langEl.style.color = colour;
+    langEl.style.color      = colour;
     langEl.style.background = colour + '1a';
-    langEl.style.border = '1px solid ' + colour + '48';
+    langEl.style.border     = '1px solid ' + colour + '48';
   } else { langEl.style.color = langEl.style.background = langEl.style.border = ''; }
 
-  document.getElementById('spCopyBtn').textContent = 'Copy';
-  document.getElementById('spCopyBtn').classList.remove('success');
+  const cpBtn = document.getElementById('spCopyBtn');
+  cpBtn.textContent = 'Copy'; cpBtn.classList.remove('success');
 
   _applyWrapState();
   _initVirtualScroll();
-  _getWorker(); // warm up worker early
+  _getWorker(); // warm up
 
-  _vsCodeHash = ''; // force fresh highlight
+  _vsHash = ''; // force fresh render
   _renderSidePanelCode(code, spLang);
 
   const panel = document.getElementById('sidePanel');
@@ -305,7 +309,7 @@ function openSidePanel(code, lang, filename, streamInfo) {
   });
 }
 
-// ─── Live update (throttled) ───────────────────────────────────────────────
+// ─── Live update ───────────────────────────────────────────────────────────
 function updateLiveSidePanel(container, msgId) {
   if (!_liveSidePanelInfo || _liveSidePanelInfo.msgId !== msgId) return;
   if (!document.getElementById('sidePanel').classList.contains('open')) {
@@ -313,8 +317,7 @@ function updateLiveSidePanel(container, msgId) {
   }
   if (_liveUpdateTimer) return;
   _liveUpdateTimer = setTimeout(() => {
-    _liveUpdateTimer = null;
-    _doLiveUpdate(container, msgId);
+    _liveUpdateTimer = null; _doLiveUpdate(container, msgId);
   }, 500);
 }
 
@@ -322,9 +325,9 @@ function _doLiveUpdate(container, msgId) {
   if (!_liveSidePanelInfo || _liveSidePanelInfo.msgId !== msgId) return;
   const wrap = container.querySelector(`.stream-wrap[data-blockidx="${_liveSidePanelInfo.blockIdx}"]`);
   if (!wrap) return;
-  const codeEl = wrap.querySelector('pre code'); if (!codeEl) return;
-  const newCode = codeEl.textContent, newLang = wrap.dataset.lang || 'text';
-  if (newCode !== spCode) { spCode = newCode; spLang = newLang; _renderSidePanelCode(newCode, newLang); }
+  const ce = wrap.querySelector('pre code'); if (!ce) return;
+  const nc = ce.textContent, nl = wrap.dataset.lang || 'text';
+  if (nc !== spCode) { spCode = nc; spLang = nl; _renderSidePanelCode(nc, nl); }
 }
 
 function clearLiveSidePanelFor(msgId) {
@@ -337,16 +340,16 @@ function closeSidePanel() {
   const panel = document.getElementById('sidePanel');
   panel.classList.remove('open'); panel.style.width = '';
   _liveSidePanelInfo = null;
-  _vsLines = []; _vsCodeHash = ''; _vsLastFirst = -1; _vsLastLast = -1;
+  _vsLines = []; _vsHash = ''; _vsLastFirst = -1; _vsLastLast = -1;
   _vsSuspended = false; _vsCancelRender();
   if (_liveUpdateTimer) { clearTimeout(_liveUpdateTimer); _liveUpdateTimer = null; }
 }
 
 function copySidePanel() {
   navigator.clipboard.writeText(spCode).then(() => {
-    const btn = document.getElementById('spCopyBtn');
-    btn.textContent = '✓ Copied!'; btn.classList.add('success');
-    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('success'); }, 2000);
+    const b = document.getElementById('spCopyBtn');
+    b.textContent = '✓ Copied!'; b.classList.add('success');
+    setTimeout(() => { b.textContent = 'Copy'; b.classList.remove('success'); }, 2000);
   });
 }
 function downloadSidePanel() { downloadCode(spCode, spLang, spFilename); }
@@ -355,7 +358,7 @@ function toggleSidePanelWrap() {
   _vsLastFirst = -1; _vsLastLast = -1; _vsScheduleRender();
 }
 
-// ─── Resize handle ─────────────────────────────────────────────────────────
+// ─── Resize ────────────────────────────────────────────────────────────────
 function _initSidePanelResize() {
   const panel  = document.getElementById('sidePanel');
   const handle = document.getElementById('spResizeHandle');
@@ -363,40 +366,35 @@ function _initSidePanelResize() {
 
   let startX = 0, startW = 0, dragging = false;
   const MIN_W = 280;
-  const getMaxW = () => Math.min(Math.floor(window.innerWidth * 0.75), window.innerWidth - 400);
-  const isMobileView = () => window.innerWidth <= 768;
+  const maxW  = () => Math.min(Math.floor(window.innerWidth * 0.75), window.innerWidth - 400);
+  const isMob = () => window.innerWidth <= 768;
 
   handle.addEventListener('mousedown', e => {
-    if (isMobileView()) return; e.preventDefault();
+    if (isMob()) return; e.preventDefault();
     dragging = true; startX = e.clientX; startW = panel.offsetWidth;
     handle.classList.add('dragging'); panel.classList.add('no-transition');
     document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none';
     _vsSuspendRendering();
   });
-
   document.addEventListener('mousemove', e => {
     if (!dragging) return;
-    panel.style.width = Math.max(MIN_W, Math.min(getMaxW(), startW + (startX - e.clientX))) + 'px';
+    panel.style.width = Math.max(MIN_W, Math.min(maxW(), startW + (startX - e.clientX))) + 'px';
   });
-
   document.addEventListener('mouseup', () => {
     if (!dragging) return; dragging = false;
     handle.classList.remove('dragging'); panel.classList.remove('no-transition');
     document.body.style.cursor = ''; document.body.style.userSelect = '';
     _vsResumeRendering();
   });
-
   handle.addEventListener('touchstart', e => {
-    if (isMobileView()) return;
+    if (isMob()) return;
     dragging = true; startX = e.touches[0].clientX; startW = panel.offsetWidth;
     panel.classList.add('no-transition'); _vsSuspendRendering();
   }, { passive: true });
-
   document.addEventListener('touchmove', e => {
     if (!dragging) return;
-    panel.style.width = Math.max(MIN_W, Math.min(getMaxW(), startW + (startX - e.touches[0].clientX))) + 'px';
+    panel.style.width = Math.max(MIN_W, Math.min(maxW(), startW + (startX - e.touches[0].clientX))) + 'px';
   }, { passive: true });
-
   document.addEventListener('touchend', () => {
     if (!dragging) return; dragging = false;
     panel.classList.remove('no-transition'); _vsResumeRendering();
