@@ -1,5 +1,5 @@
 // public/js/init.js — FULL REPLACEMENT
-// URL routing: / = blank new chat, /c/{id} = existing chat
+// / = blank page (no conversation), /c/{id} = existing chat
 
 function recoverInterruptedStreams() {
   let recovered = 0;
@@ -18,6 +18,15 @@ function recoverInterruptedStreams() {
   if (recovered > 0) { saveConvos(); console.log(`[init] Recovered ${recovered} interrupted stream(s)`); }
 }
 
+function _cleanupEmptyConversations() {
+  const before = conversations.length;
+  conversations = conversations.filter(c => c.messages.length > 0);
+  if (conversations.length !== before) {
+    saveConvos();
+    console.log(`[init] Removed ${before - conversations.length} empty conversation(s)`);
+  }
+}
+
 function _getInitialChatId() {
   const match = window.location.pathname.match(/^\/c\/(.+)$/);
   return match ? decodeURIComponent(match[1]) : null;
@@ -25,6 +34,7 @@ function _getInitialChatId() {
 
 function init() {
   recoverInterruptedStreams();
+  _cleanupEmptyConversations();
 
   _populateModelSelect(FALLBACK_MODELS);
 
@@ -34,29 +44,22 @@ function init() {
 
   renderChatList();
 
-  // ── URL-based routing ──────────────────────────────────────────────────
   const urlChatId = _getInitialChatId();
 
   if (urlChatId) {
-    // User navigated to /c/{id}
     const convo = getConvo(urlChatId);
     if (convo && convo.messages.length > 0) {
-      // Valid chat with messages — load it
       loadConvo(urlChatId, false);
       _replaceChatURL(urlChatId);
-    } else if (convo && convo.messages.length === 0) {
-      // Chat exists but is empty — treat as new chat at /
-      loadConvo(urlChatId, false);
-      _replaceRootURL();
     } else {
-      // Chat ID doesn't exist — new blank chat
-      newChat(false);
+      // Chat doesn't exist or is empty — blank page
+      showBlankState();
       _replaceRootURL();
-      toast('Chat not found', 'info');
+      if (convo) toast('Chat not found', 'info');
     }
   } else {
-    // Root URL / — always a blank new chat
-    newChat(false);
+    // Root URL — blank page
+    showBlankState();
     _replaceRootURL();
   }
 
@@ -69,7 +72,6 @@ function init() {
 
   updateTokenDisplay();
 }
-
 
 function _populateModelSelect(models) {
   const sel = document.getElementById('modelSelect');
@@ -124,21 +126,18 @@ async function loadModels() {
   } catch(e) { console.error('loadModels:', e); toast('Could not reload models','error'); }
 }
 
-// ─── Browser back/forward ─────────────────────────────────────────────────
 window.addEventListener('popstate', e => {
   const chatId = e.state?.chatId;
   if (chatId) {
     const convo = getConvo(chatId);
-    if (convo) {
+    if (convo && convo.messages.length > 0) {
       loadConvo(chatId, false);
     } else {
-      // Chat was deleted — go to new blank chat
-      newChat(false);
+      showBlankState();
       _replaceRootURL();
     }
   } else {
-    // state has no chatId → this is / → blank new chat
-    newChat(false);
+    showBlankState();
   }
 });
 

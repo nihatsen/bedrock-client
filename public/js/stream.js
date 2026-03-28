@@ -143,33 +143,49 @@ function _suggestModelSwitch() {
 
 // ─── Send message ──────────────────────────────────────────────────────────
 async function sendMessage() {
-  if (!currentConvoId || streamRegistry.has(currentConvoId)) return;
+  if (currentConvoId && streamRegistry.has(currentConvoId)) return;
   const input = document.getElementById('msgInput');
   const text  = input.value.trim();
   if (!text && !pendingFiles.length) return;
   if (!settings.apiKey) { toast('Configure API key in Settings','error'); openSettings(); return; }
   _requestNotifPermission();
-  const convo = getConvo(currentConvoId); if (!convo) return;
 
-  const isFirstMessage = convo.messages.length === 0;                       // ← NEW
+  let convo;
 
-  const uMsg = { id: Date.now().toString(), role:'user', text, files:[...pendingFiles], createdAt:Date.now() };
-  if (!convo.messages.length && text) convo.title = text.slice(0,42) + (text.length>42?'…':'');
+  if (currentConvoId === null) {
+    // ── First message: create conversation now ───────────────────────────
+    const id = Date.now().toString();
+    const title = text ? text.slice(0, 42) + (text.length > 42 ? '…' : '') : 'New Conversation';
+    convo = { id, title, messages: [], createdAt: Date.now() };
+    conversations.unshift(convo);
+    currentConvoId = id;
+    saveConvos();
+    document.getElementById('emptyState').style.display = 'none';
+  } else {
+    convo = getConvo(currentConvoId);
+    if (!convo) return;
+    if (!convo.messages.length && text) {
+      convo.title = text.slice(0, 42) + (text.length > 42 ? '…' : '');
+    }
+  }
+
+  const uMsg = { id: Date.now().toString(), role: 'user', text, files: [...pendingFiles], createdAt: Date.now() };
   convo.messages.push(uMsg);
   bumpConvoToTop(currentConvoId);
   saveConvos();
   appendMsgEl(uMsg);
 
-  if (isFirstMessage) _replaceChatURL(currentConvoId);                      // ← NEW
+  _replaceChatURL(currentConvoId);
 
   input.value = ''; autoResize(input);
   pendingFiles = []; renderFilePreview();
   userScrolledUp = false; _setScrollBtnVisible(false);
 
-  renderChatList();                                                         // ← NEW (updates sidebar title)
+  renderChatList();
 
   await runStream(currentConvoId);
 }
+
 
 
 // ─── Run stream ────────────────────────────────────────────────────────────

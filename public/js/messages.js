@@ -362,6 +362,7 @@ function editMessage(msgId) {
 }
 
 function deleteMessagePair(userMsgId) {
+  if (!currentConvoId) return;
   const convo = getConvo(currentConvoId);
   if (!convo || streamRegistry.has(currentConvoId)) { toast('Stop current response first','error'); return; }
   const idx = convo.messages.findIndex(m => m.id === userMsgId);
@@ -369,10 +370,20 @@ function deleteMessagePair(userMsgId) {
   const count = convo.messages[idx+1]?.role === 'assistant' ? 2 : 1;
   convo.messages.slice(idx, idx+count).forEach(m => invalidateMdCache(m.id));
   convo.messages.splice(idx, count);
-  saveConvos(); renderMessages(convo.messages);
 
-  if (convo.messages.length === 0) _replaceRootURL();                       // ← NEW
+  if (convo.messages.length === 0) {
+    // No messages left — remove conversation entirely, show blank page
+    const cIdx = conversations.findIndex(c => c.id === currentConvoId);
+    if (cIdx !== -1) conversations.splice(cIdx, 1);
+    saveConvos();
+    showBlankState();
+    _replaceRootURL();
+  } else {
+    saveConvos();
+    renderMessages(convo.messages);
+  }
 }
+
 
 
 function retryMessage(aId) {

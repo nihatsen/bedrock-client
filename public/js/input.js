@@ -227,6 +227,7 @@ function setStreamingUI(v) {
 }
 
 function stopGeneration() {
+  if (!currentConvoId) return;
   const ctx = streamRegistry.get(currentConvoId);
   if (ctx) ctx.abortController.abort();
   streamRegistry.delete(currentConvoId);

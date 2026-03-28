@@ -1,5 +1,5 @@
 // public/js/conversations.js — FULL REPLACEMENT
-// URL routing: / = blank new chat, /c/{id} = chat with messages
+// New Chat shows blank page. Conversation created only on first message.
 
 function isMobile() { return window.innerWidth <= 768; }
 function getConvo(id) { return conversations.find(c => c.id === id); }
@@ -13,36 +13,38 @@ function _replaceChatURL(id) { history.replaceState({ chatId: id }, '', _chatURL
 function _pushRootURL() { history.pushState({ chatId: null }, '', '/'); }
 function _replaceRootURL() { history.replaceState({ chatId: null }, '', '/'); }
 
-function _replaceURLForCurrentConvo() {
-  if (!currentConvoId) { _replaceRootURL(); return; }
-  const convo = getConvo(currentConvoId);
-  if (convo && convo.messages.length > 0) {
-    _replaceChatURL(currentConvoId);
-  } else {
-    _replaceRootURL();
-  }
-}
-
 function bumpConvoToTop(id) {
   const idx = conversations.findIndex(c => c.id === id);
   if (idx > 0) { const [c] = conversations.splice(idx, 1); conversations.unshift(c); saveConvos(); }
 }
 
+// ─── Show blank/empty state — no conversation selected ────────────────────
+function showBlankState() {
+  currentConvoId = null;
+  userScrolledUp = false;
+  _setScrollBtnVisible(false);
+
+  const wrap = document.getElementById('messagesWrap');
+  wrap.querySelectorAll('.msg-row').forEach(r => r.remove());
+  document.getElementById('emptyState').style.display = '';
+
+  setStreamingUI(false);
+  renderChatList();
+  closeSidePanel();
+}
+
+// ─── New Chat — just show blank page, don't create conversation ───────────
 function newChat(pushHistory = true) {
-  const emptyConvo = conversations.find(c => c.messages.length === 0);
-  if (emptyConvo) {
-    if (currentConvoId === emptyConvo.id) {
-      if (isMobile() && !sidebarHidden) toggleSidebar();
-      document.getElementById('msgInput')?.focus();
-      return;
-    }
-    loadConvo(emptyConvo.id, pushHistory);
+  if (currentConvoId === null) {
+    // Already on blank page — just focus input
+    if (isMobile() && !sidebarHidden) toggleSidebar();
+    document.getElementById('msgInput')?.focus();
     return;
   }
-  const id = Date.now().toString();
-  conversations.unshift({ id, title: 'New Conversation', messages: [], createdAt: Date.now() });
-  saveConvos();
-  loadConvo(id, pushHistory);
+  showBlankState();
+  if (pushHistory) _pushRootURL();
+  if (isMobile() && !sidebarHidden) toggleSidebar();
+  document.getElementById('msgInput')?.focus();
 }
 
 function loadConvo(id, pushHistory = true) {
@@ -55,14 +57,7 @@ function loadConvo(id, pushHistory = true) {
   const convo = getConvo(id);
   if (!convo) return;
 
-  // URL: /c/{id} if chat has messages, / if blank
-  if (pushHistory) {
-    if (convo.messages.length > 0) {
-      _pushChatURL(id);
-    } else {
-      _pushRootURL();
-    }
-  }
+  if (pushHistory) _pushChatURL(id);
 
   if (isMobile() && !sidebarHidden) toggleSidebar();
 
@@ -97,11 +92,11 @@ function deleteChat(id) {
   if (currentConvoId === id) {
     if (conversations.length > 0) {
       loadConvo(conversations[0].id, false);
+      _replaceChatURL(conversations[0].id);
     } else {
-      newChat(false);
+      showBlankState();
+      _replaceRootURL();
     }
-    // replaceState so back button doesn't revisit deleted chat
-    _replaceURLForCurrentConvo();
   } else { renderChatList(); }
 }
 
@@ -111,7 +106,7 @@ function clearAll() {
   streamRegistry.clear();
   conversations = []; unreadCounts = {};
   saveConvos(); saveUnread();
-  newChat(false);
+  showBlankState();
   _replaceRootURL();
 }
 
