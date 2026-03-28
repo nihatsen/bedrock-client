@@ -1,4 +1,5 @@
 // public/js/init.js — FULL REPLACEMENT
+// URL routing: / = blank new chat, /c/{id} = existing chat
 
 function recoverInterruptedStreams() {
   let recovered = 0;
@@ -17,6 +18,11 @@ function recoverInterruptedStreams() {
   if (recovered > 0) { saveConvos(); console.log(`[init] Recovered ${recovered} interrupted stream(s)`); }
 }
 
+function _getInitialChatId() {
+  const match = window.location.pathname.match(/^\/c\/(.+)$/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 function init() {
   recoverInterruptedStreams();
 
@@ -27,8 +33,32 @@ function init() {
   initScrollWatcher();
 
   renderChatList();
-  if (conversations.length > 0) loadConvo(conversations[0].id);
-  else newChat();
+
+  // ── URL-based routing ──────────────────────────────────────────────────
+  const urlChatId = _getInitialChatId();
+
+  if (urlChatId) {
+    // User navigated to /c/{id}
+    const convo = getConvo(urlChatId);
+    if (convo && convo.messages.length > 0) {
+      // Valid chat with messages — load it
+      loadConvo(urlChatId, false);
+      _replaceChatURL(urlChatId);
+    } else if (convo && convo.messages.length === 0) {
+      // Chat exists but is empty — treat as new chat at /
+      loadConvo(urlChatId, false);
+      _replaceRootURL();
+    } else {
+      // Chat ID doesn't exist — new blank chat
+      newChat(false);
+      _replaceRootURL();
+      toast('Chat not found', 'info');
+    }
+  } else {
+    // Root URL / — always a blank new chat
+    newChat(false);
+    _replaceRootURL();
+  }
 
   syncSettingsForm();
   initDragDrop();
@@ -37,7 +67,7 @@ function init() {
   if (settings.apiKey) _loadModelsBackground();
   setTimeout(() => { if (!settings.apiKey) openSettings(); }, 300);
 
-  updateTokenDisplay(); // ← add here
+  updateTokenDisplay();
 }
 
 
@@ -93,6 +123,24 @@ async function loadModels() {
     if (models.length) { _populateModelSelect(models); applyThinkingState(); }
   } catch(e) { console.error('loadModels:', e); toast('Could not reload models','error'); }
 }
+
+// ─── Browser back/forward ─────────────────────────────────────────────────
+window.addEventListener('popstate', e => {
+  const chatId = e.state?.chatId;
+  if (chatId) {
+    const convo = getConvo(chatId);
+    if (convo) {
+      loadConvo(chatId, false);
+    } else {
+      // Chat was deleted — go to new blank chat
+      newChat(false);
+      _replaceRootURL();
+    }
+  } else {
+    // state has no chatId → this is / → blank new chat
+    newChat(false);
+  }
+});
 
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') { closeSidePanel(); closeImgViewer(); closeSettings(); }

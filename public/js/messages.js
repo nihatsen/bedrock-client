@@ -224,15 +224,18 @@ function finalizeMsgEl(msg) {
   const row = document.querySelector(`[data-msg-id="${msg.id}"]`);
   if (!row) { invalidateMdCache(msg.id); return; }
 
-  // Remove ALL streaming artifacts
+  // ── Step 1: Mark as no longer streaming (prevents late _doRender) ──────
   row.classList.remove('streaming');
-  row.querySelectorAll('.stream-indicator, .stream-cursor, .stream-spinner-sm').forEach(el => el.remove());
+
+  // ── Step 2: Remove ALL streaming artifacts from entire row ─────────────
+  row.querySelectorAll(
+    '.stream-indicator, .stream-cursor, .stream-spinner-sm'
+  ).forEach(el => el.remove());
 
   const body   = row.querySelector('.msg-body');
   const textEl = row.querySelector('.msg-text');
   if (!textEl) return;
 
-  textEl.querySelector('.stream-indicator')?.remove();
   _mdCache.delete(msg.id + '_stream');
 
   if (msg._error) {
@@ -241,37 +244,56 @@ function finalizeMsgEl(msg) {
     return;
   }
 
+  // ── Step 3: Render final text ──────────────────────────────────────────
   const html = renderMd(msg.text || '');
   _mdCache.set(msg.id, html);
   textEl.innerHTML = html;
   processCodeBlocks(textEl, msg.text);
   row.dataset.codeProcessed = '1';
 
+  // ── Step 4: Final safety cleanup (catches any late race-condition) ─────
+  row.querySelectorAll(
+    '.stream-indicator, .stream-cursor, .stream-spinner-sm'
+  ).forEach(el => el.remove());
+
+  // ── Step 5: Thinking block ─────────────────────────────────────────────
   const thinkingEl = body.querySelector('.thinking-block');
 
+  if (msg.thinking) {
+    if (thinkingEl) {
+      thinkingEl.querySelectorAll('.thinking-cursor,.thinking-progress').forEach(el => el.remove());
+      const ic = thinkingEl.querySelector('.thinking-spinner'); if (ic) ic.className = 'thinking-dot';
+      const sl = thinkingEl.querySelector('.thinking-header-text');
+      if (sl) { const est = Math.round(msg.thinking.length/4); sl.textContent = `REASONING — ${tokStr(est)} est. tokens`; }
+      const tl = thinkingEl.querySelector('.thinking-topic');
+      if (tl) { tl.textContent = ''; tl.style.display = 'none'; }
+      if (!thinkingEl.classList.contains('collapsed')) thinkingEl.classList.add('collapsed');
+    }
+  } else if (thinkingEl) {
+    // No thinking content — remove empty thinking block entirely
+    thinkingEl.remove();
+  }
+
+  // ── Step 6: Stop badge (placed before thinking block) ──────────────────
   if (msg.stopReason) {
     body.querySelector('.stop-badge')?.remove();
     const sb = document.createElement('div');
     sb.className = `stop-badge ${msg.stopReason}`;
     sb.textContent = msg.stopReason === 'end_turn' ? '✓ Complete' : '⚠ Max tokens';
-    if (thinkingEl) body.insertBefore(sb, thinkingEl);
+    const tb = body.querySelector('.thinking-block');
+    if (tb) body.insertBefore(sb, tb);
     else body.appendChild(sb);
   }
 
-  if (msg.thinking) {
-    const tb = body.querySelector('.thinking-block');
-    if (tb) {
-      tb.querySelectorAll('.thinking-cursor,.thinking-progress').forEach(el => el.remove());
-      const ic = tb.querySelector('.thinking-spinner'); if (ic) ic.className = 'thinking-dot';
-      const sl = tb.querySelector('.thinking-header-text');
-      if (sl) { const est = Math.round(msg.thinking.length/4); sl.textContent = `REASONING — ${tokStr(est)} est. tokens`; }
-      // Update topic to final state
-      const tl = tb.querySelector('.thinking-topic');
-      if (tl) { tl.textContent = ''; tl.style.display = 'none'; }
-      if (!tb.classList.contains('collapsed')) tb.classList.add('collapsed');
-    }
+  // ── Step 7: Update usage in header ─────────────────────────────────────
+  if (msg.usage) {
+    const hdr = row.querySelector('.msg-header');
+    let u = hdr?.querySelector('.msg-usage');
+    if (!u && hdr) { u = document.createElement('span'); u.className = 'msg-usage'; hdr.insertBefore(u, hdr.querySelector('.msg-actions')); }
+    if (u) u.textContent = `${msg.usage.inputTokens||0}↑ ${msg.usage.outputTokens||0}↓`;
   }
 
+  // ── Step 8: File list ──────────────────────────────────────────────────
   row.querySelector('.file-list')?.remove();
   requestAnimationFrame(() => {
     const fl = buildFileList(body);
@@ -348,7 +370,10 @@ function deleteMessagePair(userMsgId) {
   convo.messages.slice(idx, idx+count).forEach(m => invalidateMdCache(m.id));
   convo.messages.splice(idx, count);
   saveConvos(); renderMessages(convo.messages);
+
+  if (convo.messages.length === 0) _replaceRootURL();                       // ← NEW
 }
+
 
 function retryMessage(aId) {
   const convo = getConvo(currentConvoId);

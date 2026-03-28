@@ -64,6 +64,9 @@ function _scheduleRender(msgId, convoId, msg) {
 
 function _doRender(msgId, msg) {
   const row = document.querySelector(`[data-msg-id="${msgId}"]`); if (!row) return;
+  // FIX: If finalizeMsgEl already ran, the 'streaming' class is gone.
+  // Without this check, a late RAF re-introduces the spinner after cleanup.
+  if (!row.classList.contains('streaming')) return;
   const t   = row.querySelector('.msg-text'); if (!t) return;
   const mw  = document.getElementById('messagesWrap');
   const st  = mw ? mw.scrollTop : 0;
@@ -81,6 +84,7 @@ function _doRender(msgId, msg) {
 
   _smartScrollRestore(mw, st, bot);
 }
+
 
 function _flushRender(msgId, msg) {
   if (_renderTimers[msgId]) { clearTimeout(_renderTimers[msgId]); delete _renderTimers[msgId]; }
@@ -139,6 +143,8 @@ async function sendMessage() {
   _requestNotifPermission();
   const convo = getConvo(currentConvoId); if (!convo) return;
 
+  const isFirstMessage = convo.messages.length === 0;                       // ← NEW
+
   const uMsg = { id: Date.now().toString(), role:'user', text, files:[...pendingFiles], createdAt:Date.now() };
   if (!convo.messages.length && text) convo.title = text.slice(0,42) + (text.length>42?'…':'');
   convo.messages.push(uMsg);
@@ -146,12 +152,17 @@ async function sendMessage() {
   saveConvos();
   appendMsgEl(uMsg);
 
+  if (isFirstMessage) _replaceChatURL(currentConvoId);                      // ← NEW
+
   input.value = ''; autoResize(input);
   pendingFiles = []; renderFilePreview();
   userScrolledUp = false; _setScrollBtnVisible(false);
 
+  renderChatList();                                                         // ← NEW (updates sidebar title)
+
   await runStream(currentConvoId);
 }
+
 
 // ─── Run stream ────────────────────────────────────────────────────────────
 async function runStream(convoId) {

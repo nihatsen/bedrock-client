@@ -1,16 +1,34 @@
 // public/js/conversations.js — FULL REPLACEMENT
+// URL routing: / = blank new chat, /c/{id} = chat with messages
 
 function isMobile() { return window.innerWidth <= 768; }
 function getConvo(id) { return conversations.find(c => c.id === id); }
 function saveConvos() { localStorage.setItem('brc_convos', JSON.stringify(conversations)); }
 function saveUnread() { localStorage.setItem('brc_unread', JSON.stringify(unreadCounts)); }
 
+// ─── URL helpers ──────────────────────────────────────────────────────────
+function _chatURL(id) { return '/c/' + encodeURIComponent(id); }
+function _pushChatURL(id) { history.pushState({ chatId: id }, '', _chatURL(id)); }
+function _replaceChatURL(id) { history.replaceState({ chatId: id }, '', _chatURL(id)); }
+function _pushRootURL() { history.pushState({ chatId: null }, '', '/'); }
+function _replaceRootURL() { history.replaceState({ chatId: null }, '', '/'); }
+
+function _replaceURLForCurrentConvo() {
+  if (!currentConvoId) { _replaceRootURL(); return; }
+  const convo = getConvo(currentConvoId);
+  if (convo && convo.messages.length > 0) {
+    _replaceChatURL(currentConvoId);
+  } else {
+    _replaceRootURL();
+  }
+}
+
 function bumpConvoToTop(id) {
   const idx = conversations.findIndex(c => c.id === id);
   if (idx > 0) { const [c] = conversations.splice(idx, 1); conversations.unshift(c); saveConvos(); }
 }
 
-function newChat() {
+function newChat(pushHistory = true) {
   const emptyConvo = conversations.find(c => c.messages.length === 0);
   if (emptyConvo) {
     if (currentConvoId === emptyConvo.id) {
@@ -18,16 +36,16 @@ function newChat() {
       document.getElementById('msgInput')?.focus();
       return;
     }
-    loadConvo(emptyConvo.id);
+    loadConvo(emptyConvo.id, pushHistory);
     return;
   }
   const id = Date.now().toString();
   conversations.unshift({ id, title: 'New Conversation', messages: [], createdAt: Date.now() });
   saveConvos();
-  loadConvo(id);
+  loadConvo(id, pushHistory);
 }
 
-function loadConvo(id) {
+function loadConvo(id, pushHistory = true) {
   saveConvos();
   currentConvoId = id;
   userScrolledUp = false;
@@ -37,13 +55,20 @@ function loadConvo(id) {
   const convo = getConvo(id);
   if (!convo) return;
 
+  // URL: /c/{id} if chat has messages, / if blank
+  if (pushHistory) {
+    if (convo.messages.length > 0) {
+      _pushChatURL(id);
+    } else {
+      _pushRootURL();
+    }
+  }
+
   if (isMobile() && !sidebarHidden) toggleSidebar();
 
   renderChatList();
 
   const ctx = streamRegistry.get(id);
-
-  // renderMessages handles scroll internally (DocumentFragment → append → scroll)
   renderMessages(convo.messages, ctx?.assistantMsgId);
 
   const isStreaming = streamRegistry.has(id);
@@ -52,7 +77,6 @@ function loadConvo(id) {
   if (isStreaming && ctx) {
     const aMsg = convo.messages.find(m => m.id === ctx.assistantMsgId);
     if (aMsg) {
-      // Give DOM time to paint, then flush streaming state
       requestAnimationFrame(() => {
         if (aMsg.text) _flushRender(aMsg.id, aMsg);
       });
@@ -64,23 +88,31 @@ function loadConvo(id) {
 
 function deleteChat(id) {
   if (streamRegistry.has(id)) { toast('Stop the current response first', 'error'); return; }
+  if (!confirm('Delete this conversation? This cannot be undone.')) return;
   const idx = conversations.findIndex(c => c.id === id);
   if (idx === -1) return;
   conversations.splice(idx, 1);
   delete unreadCounts[id];
   saveConvos(); saveUnread();
   if (currentConvoId === id) {
-    if (conversations.length > 0) loadConvo(conversations[0].id);
-    else newChat();
+    if (conversations.length > 0) {
+      loadConvo(conversations[0].id, false);
+    } else {
+      newChat(false);
+    }
+    // replaceState so back button doesn't revisit deleted chat
+    _replaceURLForCurrentConvo();
   } else { renderChatList(); }
 }
 
 function clearAll() {
-  if (!confirm('Delete all conversations?')) return;
+  if (!confirm('Delete all conversations? This cannot be undone.')) return;
   streamRegistry.forEach(ctx => ctx.abortController.abort());
   streamRegistry.clear();
   conversations = []; unreadCounts = {};
-  saveConvos(); saveUnread(); newChat();
+  saveConvos(); saveUnread();
+  newChat(false);
+  _replaceRootURL();
 }
 
 function startRename(id, el) {
