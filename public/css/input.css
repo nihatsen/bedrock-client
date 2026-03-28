@@ -37,3 +37,11 @@
 .drop-zone svg { color: var(--cyan); opacity: 0.7; }
 .drop-title { font-size: 18px; font-weight: 700; }
 .drop-sub { font-size: 13px; color: var(--text2); }
+
+/* ─── PASTE CHIP ──────────────────────────────────────────────────────── */
+.file-preview-chip.paste-chip { gap: 8px; max-width: 360px; padding: 6px 10px; cursor: pointer; transition: border-color 0.15s; }
+.file-preview-chip.paste-chip:hover { border-color: var(--accent); }
+.fp-paste-icon { font-size: 14px; flex-shrink: 0; }
+.fp-paste-preview { max-width: 140px !important; font-size: 10px; color: var(--text2); }
+.fp-paste-badge { padding: 1px 6px; border-radius: 3px; font-size: 9px; font-weight: 700; font-family: var(--mono); background: var(--bg5); color: var(--text0); letter-spacing: 0.06em; flex-shrink: 0; }
+.fp-paste-meta { font-size: 9px; color: var(--text3); font-family: var(--mono); white-space: nowrap; flex-shrink: 0; }

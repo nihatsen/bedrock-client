@@ -146,21 +146,33 @@ function appendMsgEl(msg, isStreaming = false, returnOnly = false) {
   const body = document.createElement('div');
   body.className = 'msg-body';
 
+  // ── File / paste / image attachments ───────────────────────────────────
   if (msg.files?.length) {
-    const chips = document.createElement('div'); chips.className = 'file-chips';
+    const attachments = document.createElement('div');
+    attachments.className = 'msg-attachments';
+
     msg.files.forEach(f => {
       if (f.type === 'image') {
         const img = document.createElement('img');
         img.src = `data:${f.mediaType};base64,${f.data}`;
-        img.className = 'inline-img'; img.title = 'Click to enlarge';
+        img.className = 'inline-img'; img.title = f.name || 'Click to enlarge';
         img.onclick = () => openImgViewer(img.src);
-        body.appendChild(img);
+        attachments.appendChild(img);
+      } else if (f.type === 'paste' || f.type === 'text') {
+        const card = _buildAttachmentCard(
+          f.type === 'paste' ? '📋' : '📄',
+          f.type === 'paste' ? 'Pasted content' : f.name,
+          f, true
+        );
+        attachments.appendChild(card);
+      } else {
+        // PDF or unknown — info only
+        const card = _buildAttachmentCard('📄', f.name, f, false);
+        attachments.appendChild(card);
       }
-      const chip = document.createElement('div'); chip.className = 'file-chip';
-      chip.innerHTML = `<span class="file-chip-name">${esc(f.name)}</span><span class="file-chip-size">${fmtSize(f.size)}</span>`;
-      chips.appendChild(chip);
     });
-    body.appendChild(chips);
+
+    body.appendChild(attachments);
   }
 
   const textEl = document.createElement('div');
@@ -179,10 +191,7 @@ function appendMsgEl(msg, isStreaming = false, returnOnly = false) {
       ind.innerHTML = '<span class="stream-spinner-sm"></span><span class="stream-cursor"></span>';
       textEl.appendChild(ind);
     } else {
-      // Use cached markdown — no re-parse on chat switch
       textEl.innerHTML = _cachedRenderMd(msg.id, msg.text || '');
-      // Code blocks processed lazily by IntersectionObserver (see renderMessages)
-      // For individually appended messages (new messages), process immediately when visible
       if (!returnOnly) {
         requestAnimationFrame(() => {
           processCodeBlocks(textEl, msg.text);
@@ -217,6 +226,62 @@ function appendMsgEl(msg, isStreaming = false, returnOnly = false) {
   }
 
   return row;
+}
+
+// ─── Build clickable attachment card ──────────────────────────────────────
+function _buildAttachmentCard(icon, title, file, viewable) {
+  const text = viewable ? decodeBase64UTF8(file.data) : null;
+  const lines = text ? text.split('\n').length : 0;
+
+  const card = document.createElement('div');
+  card.className = 'attachment-card' + (viewable ? ' clickable' : '');
+
+  const iconEl = document.createElement('div');
+  iconEl.className = 'attachment-card-icon';
+  iconEl.textContent = icon;
+
+  const info = document.createElement('div');
+  info.className = 'attachment-card-info';
+
+  const nameEl = document.createElement('div');
+  nameEl.className = 'attachment-card-name';
+  nameEl.textContent = title;
+
+  const meta = document.createElement('div');
+  meta.className = 'attachment-card-meta';
+  const parts = [];
+  if (file.size) parts.push(fmtSize(file.size));
+  if (lines) parts.push(lines.toLocaleString() + ' lines');
+  meta.textContent = parts.join(' • ');
+
+  info.appendChild(nameEl);
+  info.appendChild(meta);
+
+  if (viewable && text) {
+    const preview = document.createElement('div');
+    preview.className = 'attachment-card-preview';
+    preview.textContent = text.slice(0, 200).replace(/\n/g, ' ');
+    info.appendChild(preview);
+  }
+
+  card.appendChild(iconEl);
+  card.appendChild(info);
+
+  if (file.type === 'paste') {
+    const badge = document.createElement('span');
+    badge.className = 'attachment-card-badge';
+    badge.textContent = 'PASTED';
+    card.appendChild(badge);
+  }
+
+  if (viewable && text) {
+    card.addEventListener('click', () => {
+      const metaStr = parts.join(' • ') + (file.type === 'paste' ? ' • Formatting may be inconsistent from source' : '');
+      openPasteViewer(title, text, metaStr);
+    });
+  }
+
+  return card;
 }
 
 // ─── finalizeMsgEl ─────────────────────────────────────────────────────────

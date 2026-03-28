@@ -236,6 +236,24 @@
   </div>
 </div>
 
+<!-- ─── PASTE / FILE VIEWER ───────────────────────────────────────────── -->
+<div class="modal-overlay" id="pasteModal" onclick="handlePasteModalClick(event)">
+  <div class="modal paste-modal">
+    <div class="modal-header">
+      <div style="flex:1;min-width:0;">
+        <span class="modal-title" id="pasteModalTitle">Pasted content</span>
+        <div class="paste-modal-meta" id="pasteModalMeta"></div>
+      </div>
+      <button class="sp-btn" id="pasteModalCopyBtn" onclick="copyPasteContent()" style="flex-shrink:0;">Copy</button>
+      <button class="modal-close" onclick="closePasteViewer()">✕</button>
+    </div>
+    <div class="paste-modal-body">
+      <pre id="pasteModalContent"></pre>
+    </div>
+  </div>
+</div>
+
+
 <!-- ─── TOAST ─────────────────────────────────────────────────────────── -->
 <div class="toast" id="toast"></div>
 

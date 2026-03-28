@@ -142,10 +142,11 @@ window.addEventListener('popstate', e => {
 });
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { closeSidePanel(); closeImgViewer(); closeSettings(); }
+  if (e.key === 'Escape') { closeSidePanel(); closeImgViewer(); closeSettings(); closePasteViewer(); }
   if ((e.metaKey||e.ctrlKey) && e.key === ',') { e.preventDefault(); openSettings(); }
   if ((e.metaKey||e.ctrlKey) && e.key === 'n') { e.preventDefault(); newChat(); }
 });
+
 
 window.addEventListener('beforeunload', () => { saveConvos(); saveUnread(); });
 

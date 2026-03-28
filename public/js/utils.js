@@ -127,3 +127,50 @@ function sendNotif(title,body,convoId) {
   n.onclick=()=>{window.focus();if(convoId)loadConvo(convoId);n.close();};
   setTimeout(()=>n.close(),8000);
 }
+
+// ─── Base64 UTF-8 encode/decode ────────────────────────────────────────
+function encodeUTF8Base64(text) {
+  const bytes = new TextEncoder().encode(text);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+
+function decodeBase64UTF8(b64) {
+  try {
+    const binary = atob(b64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new TextDecoder().decode(bytes);
+  } catch(e) {
+    try { return atob(b64); } catch(e2) { return '(unable to decode)'; }
+  }
+}
+
+// ─── Paste / file viewer modal ─────────────────────────────────────────
+let _pasteViewerContent = '';
+
+function openPasteViewer(title, text, meta) {
+  _pasteViewerContent = text;
+  document.getElementById('pasteModalTitle').textContent = title;
+  document.getElementById('pasteModalMeta').textContent = meta || '';
+  document.getElementById('pasteModalContent').textContent = text;
+  const btn = document.getElementById('pasteModalCopyBtn');
+  if (btn) { btn.textContent = 'Copy'; btn.classList.remove('success'); }
+  document.getElementById('pasteModal').classList.add('open');
+}
+
+function closePasteViewer() {
+  document.getElementById('pasteModal').classList.remove('open');
+}
+
+function handlePasteModalClick(e) {
+  if (e.target === document.getElementById('pasteModal')) closePasteViewer();
+}
+
+function copyPasteContent() {
+  navigator.clipboard.writeText(_pasteViewerContent).then(() => {
+    const btn = document.getElementById('pasteModalCopyBtn');
+    if (btn) { btn.textContent = '✓ Copied!'; btn.classList.add('success'); setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('success'); }, 2000); }
+  });
+}

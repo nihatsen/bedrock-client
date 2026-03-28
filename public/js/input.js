@@ -1,11 +1,8 @@
 // public/js/input.js — FULL REPLACEMENT
+// Adds: large text paste → attachment card, clickable file/paste preview
 
-// ═══════════════════════════════════════════════════════════════════════════
-// INPUT — Drag/drop, paste, file upload, keyboard, resize, scroll button
-//
-// Fix: Scroll button is inside #mainPanel with position:absolute so it
-// never overlaps the side panel. Size reduced to 36px.
-// ═══════════════════════════════════════════════════════════════════════════
+const PASTE_THRESHOLD_CHARS = 500;
+const PASTE_THRESHOLD_LINES = 8;
 
 function initDragDrop() {
   const overlay = document.getElementById('dropOverlay');
@@ -63,6 +60,7 @@ function initPaste() {
     const items = Array.from(e.clipboardData.items || []);
     if (!items.length) return;
 
+    // 1. Image paste — always intercept
     const imageItems = items.filter(i => i.kind === 'file' && i.type.startsWith('image/'));
     if (imageItems.length) {
       e.preventDefault();
@@ -70,6 +68,8 @@ function initPaste() {
       if (files.length) { await uploadFiles(files); toast(`✓ Pasted ${files.length} image${files.length > 1 ? 's' : ''}`, 'success'); }
       return;
     }
+
+    // 2. File paste
     const fileItems = items.filter(i => i.kind === 'file');
     if (fileItems.length) {
       const hasText = items.some(i => i.kind === 'string' && i.type === 'text/plain');
@@ -78,7 +78,32 @@ function initPaste() {
         const files = fileItems.map(i => i.getAsFile()).filter(Boolean);
         if (files.length) { await uploadFiles(files); toast(`✓ Pasted ${files.length} file${files.length > 1 ? 's' : ''}`, 'success'); }
       }
+      return;
     }
+
+    // 3. Large text paste → convert to attachment (only in message input)
+    const active = document.activeElement;
+    if (!active || active.id !== 'msgInput') return;
+
+    const text = e.clipboardData.getData('text/plain');
+    if (!text) return;
+
+    const lines = text.split('\n').length;
+    if (text.length > PASTE_THRESHOLD_CHARS || lines > PASTE_THRESHOLD_LINES) {
+      e.preventDefault();
+      const encoded = encodeUTF8Base64(text);
+      const size = new Blob([text]).size;
+      pendingFiles.push({
+        name: 'Pasted content',
+        type: 'paste',
+        mediaType: 'text/plain',
+        data: encoded,
+        size: size,
+      });
+      renderFilePreview();
+      toast(`✓ Pasted as attachment (${fmtSize(size)} • ${lines.toLocaleString()} lines)`, 'success');
+    }
+    // Small text → falls through naturally to textarea
   });
 }
 
@@ -105,29 +130,88 @@ async function handleFileSelect(event) {
   event.target.value = '';
 }
 
+function _getFileText(f) {
+  if (!f.data) return null;
+  if (f.type === 'paste' || f.type === 'text') return decodeBase64UTF8(f.data);
+  return null;
+}
+
+function _getFileMeta(f) {
+  const text = _getFileText(f);
+  const lines = text ? text.split('\n').length : 0;
+  const parts = [fmtSize(f.size)];
+  if (lines) parts.push(lines.toLocaleString() + ' lines');
+  return parts.join(' • ');
+}
+
 function renderFilePreview() {
   const bar = document.getElementById('filePreviewBar');
   if (!bar) return;
   bar.innerHTML = '';
   pendingFiles.forEach((f, i) => {
     const chip = document.createElement('div');
-    chip.className = 'file-preview-chip';
-    if (f.type === 'image') {
+    chip.className = 'file-preview-chip' + (f.type === 'paste' ? ' paste-chip' : '');
+
+    if (f.type === 'paste') {
+      const text = _getFileText(f);
+      const lines = text ? text.split('\n').length : 0;
+
+      const icon = document.createElement('span');
+      icon.className = 'fp-paste-icon'; icon.textContent = '📋';
+      const preview = document.createElement('span');
+      preview.className = 'fp-name fp-paste-preview';
+      preview.textContent = (text || '').slice(0, 80).replace(/\n/g, ' ') + ((text || '').length > 80 ? '…' : '');
+      const badge = document.createElement('span');
+      badge.className = 'fp-paste-badge'; badge.textContent = 'PASTED';
+      const meta = document.createElement('span');
+      meta.className = 'fp-paste-meta';
+      meta.textContent = `${fmtSize(f.size)} • ${lines.toLocaleString()} lines`;
+
+      chip.appendChild(icon);
+      chip.appendChild(preview);
+      chip.appendChild(badge);
+      chip.appendChild(meta);
+
+      chip.addEventListener('click', e => {
+        if (e.target.closest('.remove-file')) return;
+        openPasteViewer('Pasted content', text,
+          `${fmtSize(f.size)} • ${lines.toLocaleString()} lines • Formatting may be inconsistent from source`);
+      });
+    } else if (f.type === 'image') {
       const img = document.createElement('img');
       img.src = `data:${f.mediaType};base64,${f.data}`;
       img.className = 'fp-img';
       chip.appendChild(img);
+      const name = document.createElement('span');
+      name.className = 'fp-name'; name.textContent = f.name;
+      chip.appendChild(name);
+
+      chip.style.cursor = 'pointer';
+      chip.addEventListener('click', e => {
+        if (e.target.closest('.remove-file')) return;
+        openImgViewer(img.src);
+      });
     } else {
-      const icon = document.createElement('span');
-      icon.textContent = '📄';
+      const icon = document.createElement('span'); icon.textContent = '📄';
       chip.appendChild(icon);
+      const name = document.createElement('span');
+      name.className = 'fp-name'; name.textContent = f.name;
+      chip.appendChild(name);
+
+      if (f.type === 'text') {
+        chip.style.cursor = 'pointer';
+        chip.addEventListener('click', e => {
+          if (e.target.closest('.remove-file')) return;
+          const text = _getFileText(f);
+          if (text) openPasteViewer(f.name, text, _getFileMeta(f));
+        });
+      }
     }
-    const name = document.createElement('span');
-    name.className = 'fp-name'; name.textContent = f.name;
+
     const rm = document.createElement('button');
     rm.className = 'remove-file'; rm.textContent = '×';
-    rm.onclick = () => { pendingFiles.splice(i, 1); renderFilePreview(); };
-    chip.appendChild(name); chip.appendChild(rm);
+    rm.onclick = e => { e.stopPropagation(); pendingFiles.splice(i, 1); renderFilePreview(); };
+    chip.appendChild(rm);
     bar.appendChild(chip);
   });
 }
@@ -154,50 +238,21 @@ function scrollBottom() {
   _setScrollBtnVisible(false);
 }
 
-// ─── Scroll-to-bottom button — inside #mainPanel, not body ───────────────
 let _scrollBtn = null;
 
 function _createScrollBtn() {
   if (_scrollBtn) { _scrollBtn.remove(); _scrollBtn = null; }
-
   const btn = document.createElement('button');
   btn.id = 'scrollBtnJS';
   btn.setAttribute('aria-label', 'Scroll to bottom');
-  btn.style.cssText = `
-    position: absolute;
-    bottom: 76px;
-    right: 16px;
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    background: #3a3a3a;
-    border: 1.5px solid #666;
-    color: #fff;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    box-shadow: 0 2px 12px rgba(0,0,0,0.5);
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.2s, transform 0.2s, border-color 0.2s, background 0.2s;
-    z-index: 10;
-    transform: translateY(10px);
-  `;
-  btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-    stroke="currentColor" stroke-width="2.5" style="pointer-events:none">
-    <polyline points="6 9 12 15 18 9"/></svg>`;
+  btn.style.cssText = `position:absolute;bottom:76px;right:16px;width:36px;height:36px;border-radius:50%;background:#3a3a3a;border:1.5px solid #666;color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 12px rgba(0,0,0,0.5);opacity:0;pointer-events:none;transition:opacity 0.2s,transform 0.2s,border-color 0.2s,background 0.2s;z-index:10;transform:translateY(10px);`;
+  btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="pointer-events:none"><polyline points="6 9 12 15 18 9"/></svg>`;
   btn.addEventListener('mouseenter', () => { btn.style.background = '#4a4a4a'; btn.style.borderColor = '#d4a574'; });
   btn.addEventListener('mouseleave', () => { btn.style.background = '#3a3a3a'; btn.style.borderColor = '#666'; });
   btn.addEventListener('click', () => scrollBottom());
-
-  // Append inside .main so it's confined to the main content area
   const mainPanel = document.getElementById('mainPanel');
-  if (mainPanel) {
-    mainPanel.appendChild(btn);
-  } else {
-    document.body.appendChild(btn);
-  }
+  if (mainPanel) mainPanel.appendChild(btn);
+  else document.body.appendChild(btn);
   _scrollBtn = btn;
 }
 

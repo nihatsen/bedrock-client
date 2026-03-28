@@ -40,3 +40,19 @@
 
 .form-input optgroup { background: var(--bg3); color: var(--text3); font-size: 10px; font-family: var(--mono); }
 .form-input optgroup option { color: var(--text0); font-size: 12px; padding: 4px 0; }
+
+/* ─── PASTE / FILE VIEWER MODAL ───────────────────────────────────────── */
+.paste-modal { width: 700px; max-height: 85vh; display: flex; flex-direction: column; }
+.paste-modal-meta { font-size: 11px; color: var(--text2); font-family: var(--mono); margin-top: 2px; }
+.paste-modal-body { flex: 1; overflow: auto; padding: 0 !important; background: var(--code-bg); border-radius: 0 0 16px 16px; -webkit-overflow-scrolling: touch; }
+.paste-modal-body pre { margin: 0; padding: 16px 20px; font-family: var(--mono); font-size: 12px; line-height: 1.65; color: var(--text1); white-space: pre-wrap; word-break: break-word; }
+
+@media (max-width: 768px) {
+  .paste-modal { width: 96vw; max-height: 90vh; }
+}
+@media (max-width: 480px) {
+  .paste-modal { width: 100vw; max-width: 100vw; height: 100vh; height: 100dvh; max-height: 100dvh; border-radius: 0; margin: 0; }
+  .paste-modal .modal-header { border-radius: 0; padding-top: max(14px, var(--sat)); }
+  .paste-modal-body { border-radius: 0; }
+  .paste-modal-body pre { font-size: 11px; padding: 12px 14px; }
+}
