@@ -64,9 +64,16 @@ function _scheduleRender(msgId, convoId, msg) {
 
 function _doRender(msgId, msg) {
   const row = document.querySelector(`[data-msg-id="${msgId}"]`); if (!row) return;
-  // FIX: If finalizeMsgEl already ran, the 'streaming' class is gone.
-  // Without this check, a late RAF re-introduces the spinner after cleanup.
   if (!row.classList.contains('streaming')) return;
+
+  // FIX: Don't destroy DOM while user is selecting/copying text.
+  // The next text_delta will re-trigger _scheduleRender naturally.
+  const sel = window.getSelection();
+  if (sel && !sel.isCollapsed) {
+    const mw = document.getElementById('messagesWrap');
+    if (mw && sel.anchorNode && mw.contains(sel.anchorNode)) return;
+  }
+
   const t   = row.querySelector('.msg-text'); if (!t) return;
   const mw  = document.getElementById('messagesWrap');
   const st  = mw ? mw.scrollTop : 0;
@@ -84,6 +91,7 @@ function _doRender(msgId, msg) {
 
   _smartScrollRestore(mw, st, bot);
 }
+
 
 
 function _flushRender(msgId, msg) {

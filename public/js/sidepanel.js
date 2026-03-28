@@ -172,13 +172,15 @@ function _vsEnsureTable() {
   if (_vsTable && wrap.contains(_vsTable)) return true;
   _vsTable = document.createElement('table');
   _vsTable.className = 'sp-code-table';
-  _vsTable.style.cssText = 'position:absolute;left:0;right:0;top:0;margin:0;';
+  // Position is set dynamically by _vsRenderWindow based on wrap mode
+  _vsTable.style.cssText = 'left:0;right:0;top:0;margin:0;';
   _vsTbody = document.createElement('tbody');
   _vsTable.appendChild(_vsTbody);
   wrap.innerHTML = '';
   wrap.appendChild(_vsTable);
   return true;
 }
+
 
 function _fastHash(s) {
   let h = 0;
@@ -191,14 +193,18 @@ function _vsSetHeight(lineCount) {
   const wrap = document.getElementById('spCodeWrap');
   if (!wrap) return;
   if (_wrapOn) {
-    // Wrap mode: let content determine height — fixed estimate is wrong
-    // because wrapped lines are taller than VS_ROW_H
-    wrap.style.height = 'auto';
+    // Wrap mode: table is position:relative, its natural height drives scroll.
+    // We only set minHeight so the gutter ::before stretches to at least the viewport.
+    wrap.style.height    = '';
+    wrap.style.minHeight = '100%';
   } else {
+    // Virtual scroll mode: fixed height based on line count
     const h = VS_PAD + lineCount * VS_ROW_H + VS_PAD;
-    wrap.style.height = h.toFixed(1) + 'px';
+    wrap.style.height    = h.toFixed(1) + 'px';
+    wrap.style.minHeight = '';
   }
 }
+
 
 function _vsRenderWindow() {
   if (_vsSuspended) return;
@@ -208,13 +214,16 @@ function _vsRenderWindow() {
 
   const total = _vsLines.length;
 
-  // ── Wrap mode: render ALL lines (no virtual scroll) ────────────────────
-  // Fixed row height doesn't work when lines wrap to multiple visual rows.
+  // ── Wrap mode: render ALL lines, relative position so height flows ─────
   if (_wrapOn) {
+    _vsTable.style.position  = 'relative';
+    _vsTable.style.transform = 'none';
+
+    // Skip if already rendered this exact set
     if (_vsLastFirst === 0 && _vsLastLast === total - 1) return;
     _vsLastFirst = 0;
     _vsLastLast  = total - 1;
-    _vsTable.style.transform = `translateY(${VS_PAD}px)`;
+
     let html = '';
     for (let i = 0; i < total; i++) {
       html += `<tr class="sp-line"><td class="sp-line-num">${i+1}</td><td class="sp-line-code">${_vsLines[i]||'\u200B'}</td></tr>`;
@@ -223,7 +232,9 @@ function _vsRenderWindow() {
     return;
   }
 
-  // ── Non-wrap mode: virtual scroll with fixed row height ────────────────
+  // ── Non-wrap: virtual scroll with absolute position + fixed row height ─
+  _vsTable.style.position = 'absolute';
+
   const scrollTop = body.scrollTop;
   const clientH   = body.clientHeight;
 
@@ -621,11 +632,13 @@ function downloadSidePanel() { downloadCode(spCode, spLang, spFilename); }
 
 function toggleSidePanelWrap() {
   _wrapOn = !_wrapOn; _applyWrapState();
+  // Must reset everything since position mode changes between relative/absolute
   _vsSetHeight(_vsLines.length);
   if (_vsTbody) _vsTbody.innerHTML = '';
   _vsLastFirst = -1; _vsLastLast = -1;
   _vsScheduleRender();
 }
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 // RESIZE
