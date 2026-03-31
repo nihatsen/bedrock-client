@@ -1,10 +1,108 @@
 // public/js/conversations.js — FULL REPLACEMENT
-// New Chat shows blank page. Conversation created only on first message.
+// Fixes QuotaExceededError by progressively compacting file data on save failure.
 
 function isMobile() { return window.innerWidth <= 768; }
 function getConvo(id) { return conversations.find(c => c.id === id); }
-function saveConvos() { localStorage.setItem('brc_convos', JSON.stringify(conversations)); }
 function saveUnread() { localStorage.setItem('brc_unread', JSON.stringify(unreadCounts)); }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SAFE SAVE — catches QuotaExceededError and compacts before retrying
+// ═══════════════════════════════════════════════════════════════════════════
+function saveConvos() {
+  if (_trySave()) return;
+
+  // QuotaExceededError (or other write failure) — compact and retry
+  console.warn('[storage] Save failed, compacting...');
+
+  // Pass 1: Strip file data from all messages except last 6 in current convo
+  _stripFileData(6);
+  if (_trySave()) {
+    console.log('[storage] Saved after stripping old file data');
+    return;
+  }
+
+  // Pass 2: Strip ALL file data everywhere
+  _stripFileData(0);
+  if (_trySave()) {
+    console.log('[storage] Saved after stripping all file data');
+    toast('Storage full — file attachments removed from history to free space', 'info');
+    return;
+  }
+
+  // Pass 3: Remove oldest conversations until it fits
+  while (conversations.length > 1) {
+    const removed = conversations.pop();
+    console.warn(`[storage] Dropped oldest conversation: "${removed.title}"`);
+    if (_trySave()) {
+      toast('Storage full — oldest conversations removed to free space', 'info');
+      renderChatList();
+      return;
+    }
+  }
+
+  // Pass 4: Truncate long message text in the single remaining conversation
+  if (conversations.length > 0) {
+    for (const msg of conversations[0].messages) {
+      if (msg.text && msg.text.length > 3000) {
+        msg.text = msg.text.slice(0, 3000) + '\n[…truncated to free storage…]';
+      }
+      if (msg.thinking && msg.thinking.length > 1000) {
+        msg.thinking = msg.thinking.slice(0, 1000) + '\n[…truncated…]';
+      }
+    }
+    if (_trySave()) {
+      toast('Storage full — messages truncated to free space', 'info');
+      return;
+    }
+  }
+
+  // Final fallback: couldn't save at all
+  console.error('[storage] Unable to save even after full compaction');
+  toast('⚠ Storage full — could not save. Consider clearing old chats.', 'error');
+}
+
+function _trySave() {
+  try {
+    localStorage.setItem('brc_convos', JSON.stringify(conversations));
+    return true;
+  } catch (e) {
+    if (e.name !== 'QuotaExceededError' && e.code !== 22) {
+      console.error('[storage] Unexpected save error:', e);
+    }
+    return false;
+  }
+}
+
+/**
+ * Strip base64 `.data` from file attachments to free localStorage space.
+ * Keeps file metadata (name, type, mediaType, size) so UI still shows cards.
+ *
+ * @param {number} keepRecentInCurrent - Number of recent messages in the
+ *   current conversation whose file data should be preserved. Use 0 to strip all.
+ */
+function _stripFileData(keepRecentInCurrent) {
+  for (const convo of conversations) {
+    const msgs = convo.messages;
+    const isCurrent = convo.id === currentConvoId;
+
+    // Messages from index 0 to (protectFrom - 1) get their file data stripped.
+    // Messages from protectFrom onward keep their data.
+    const protectFrom = isCurrent
+      ? Math.max(0, msgs.length - keepRecentInCurrent)
+      : msgs.length; // non-current convos: strip everything
+
+    for (let i = 0; i < protectFrom; i++) {
+      const msg = msgs[i];
+      if (!msg.files?.length) continue;
+      for (const f of msg.files) {
+        if (f.data) {
+          delete f.data;
+          f._stripped = true; // marker so UI can show "data unavailable"
+        }
+      }
+    }
+  }
+}
 
 // ─── URL helpers ──────────────────────────────────────────────────────────
 function _chatURL(id) { return '/c/' + encodeURIComponent(id); }
@@ -37,7 +135,6 @@ function showBlankState() {
 // ─── New Chat — just show blank page, don't create conversation ───────────
 function newChat(pushHistory = true) {
   if (currentConvoId === null) {
-    // Already on blank page — just focus input
     if (isMobile() && !sidebarHidden) toggleSidebar();
     document.getElementById('msgInput')?.focus();
     return;
