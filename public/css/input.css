@@ -28,8 +28,17 @@
 .stop-btn:hover { background: rgba(232,122,144,0.25); }
 .stop-btn.visible { display: flex; }
 
-.input-hint { font-size: 10px; font-family: var(--mono); color: var(--text3); width: 100%; max-width: 760px; padding: 0 4px; }
-
+.input-hint {
+  display: flex;
+  align-items: center;
+  font-size: 10px;
+  font-family: var(--mono);
+  color: var(--text3);
+  width: 100%;
+  max-width: 760px;
+  padding: 0 4px;
+  gap: 2px;
+}
 /* ─── DROP OVERLAY ────────────────────────────────────────────────────────── */
 .drop-overlay { position: fixed; inset: 0; z-index: 300; background: rgba(10,10,10,0.85); backdrop-filter: blur(6px); display: flex; align-items: center; justify-content: center; opacity: 0; pointer-events: none; transition: opacity 0.2s; }
 .drop-overlay.visible { opacity: 1; pointer-events: all; }

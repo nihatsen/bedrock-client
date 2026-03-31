@@ -235,7 +235,7 @@ async function runStream(convoId) {
     _thinkingBudget: useThink ? budget : 0,
     createdAt: Date.now(),
     modelName: currentModelName || 'Assistant',
-    _modelId: modelId, // stored per-message for accurate cost calc
+    _modelId: modelId,
   };
   convo.messages.push(aMsg); saveConvos();
 
@@ -249,9 +249,28 @@ async function runStream(convoId) {
   const ac = new AbortController();
   streamRegistry.set(convoId, { abortController:ac, assistantMsgId:aMsg.id });
 
-  const apiMsgs = convo.messages.slice(0,-1)
-    .filter(m => !m._error && (m.text?.trim() || m.files?.length))
-    .map(m => ({ role:m.role, text:m.text, files:m.files||[] }));
+  // ═══════════════════════════════════════════════════════════════════════
+  // FIX: Use context optimization instead of sending raw messages.
+  //
+  // BEFORE: Every message sent in full, including base64 file data from
+  //         the entire conversation. A 20-message chat with 3 images
+  //         could waste 300K–600K tokens per request.
+  //
+  // AFTER:  prepareMessagesForSend() strips file data from old messages,
+  //         compresses code blocks, truncates old text, and summarizes
+  //         dropped messages. Only recent messages keep full fidelity.
+  // ═══════════════════════════════════════════════════════════════════════
+  const { messages: apiMsgs, stats: ctxStats } = prepareMessagesForSend(
+    convo.messages.slice(0, -1)  // exclude the empty assistant placeholder
+  );
+
+  if (ctxStats && ctxStats.savedTokenEst > 0) {
+    console.log(
+      `[context] Optimized: ~${tokStr(ctxStats.savedTokenEst)} tokens saved (${ctxStats.savedPct}%) ` +
+      `| dropped:${ctxStats.dropped} compressed:${ctxStats.truncated} full:${ctxStats.full} ` +
+      `| sent:${ctxStats.totalSent} msgs`
+    );
+  }
 
   const saveInterval = setInterval(() => saveConvos(), 2000);
 
@@ -381,7 +400,6 @@ function handleSSE(ev, convoId, msg, budget) {
   if (ev.type === 'usage') {
     msg.usage = { inputTokens:ev.usage?.inputTokens, outputTokens:ev.usage?.outputTokens };
 
-    // Use the model stored on the message (not current, in case user switched)
     const usedModelId = msg._modelId || currentModelId;
     recordTokenUsage(msg.usage.inputTokens, msg.usage.outputTokens);
 

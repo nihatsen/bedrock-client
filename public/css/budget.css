@@ -1,23 +1,112 @@
-/* ─── COST PREVIEW ────────────────────────────────────────────────────────── */
-#costPreview {
+/* ─── COST PREVIEW WRAPPER & TOGGLE ──────────────────────────────────────── */
+.cost-preview-wrap {
+  display: flex;
+  align-items: flex-start;
+  width: 100%;
+  max-width: 760px;
+  overflow: hidden;
+  transition: max-height 0.2s ease, opacity 0.2s ease;
+  max-height: 120px;
+  opacity: 1;
+}
+
+.cost-preview-wrap.collapsed {
+  max-height: 0 !important;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.cp-toggle-btn {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text3);
+  font-size: 11px;
+  padding: 0;
   display: none;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s;
+  line-height: 1;
+  margin-right: 4px;
+}
+.cp-toggle-btn:hover { color: var(--text1); }
+.cp-toggle-btn.has-content { display: inline-flex; }
+.cost-preview-wrap.collapsed ~ .input-hint .cp-toggle-btn { color: var(--accent); opacity: 0.7; }
+.cost-preview-wrap.collapsed ~ .input-hint .cp-toggle-btn:hover { opacity: 1; }
+
+
+
+/* ─── COST PREVIEW ────────────────────────────────────────────────────────── */
+.cost-preview {
+  display: none;
+  flex-direction: column;
+  gap: 2px;
   font-size: 10px;
   font-family: var(--mono);
   color: var(--text2);
   width: 100%;
   max-width: 760px;
-  padding: 0 4px;
-  flex-wrap: wrap;
-  gap: 4px;
-  align-items: center;
-  line-height: 1.6;
+  padding: 3px 4px 0;
+  line-height: 1.5;
+  user-select: none;
 }
-.cost-preview-tokens { color: var(--text1); }
-.cost-preview-sep { color: var(--text3); }
-.cost-preview-history { color: var(--text2); }
-.cost-preview-cost { color: var(--accent); font-weight: 600; }
-.cost-preview-budget { color: var(--cyan); }
-.cost-preview-warn { color: var(--orange); font-weight: 500; }
+.cost-preview.visible { display: flex; }
+
+.cp-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 4px;
+  align-items: center;
+}
+.cp-row:empty { display: none; }
+.cp-row-detail { opacity: 0.75; }
+
+/* ─── Chips ───────────────────────────────────────────────────────────────── */
+.cp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  white-space: nowrap;
+  cursor: default;
+  transition: opacity 0.15s;
+}
+.cp-chip:hover { opacity: 1 !important; }
+.cp-chip[title] { cursor: help; }
+
+.cp-dim  { opacity: 0.55; font-size: 9px; }
+.cp-sep  { color: var(--text3); font-size: 9px; margin: 0; }
+
+.cp-new     { color: var(--text1); }
+.cp-hist    { color: var(--text2); }
+.cp-sys     { color: var(--text2); }
+.cp-total   { color: var(--text0); font-weight: 600; background: rgba(255,255,255,0.04); border-radius: 3px; padding: 1px 6px; }
+.cp-think   { color: var(--think); }
+.cp-cost    { color: var(--accent); font-weight: 600; }
+.cp-out     { color: var(--text2); }
+.cp-savings { color: var(--green); }
+.cp-warn    { color: var(--orange); font-weight: 500; }
+.cp-budget  { color: var(--cyan); }
+.cp-model   { color: var(--text3); font-size: 9px; }
+.cp-pricing { color: var(--text3); font-size: 9px; }
+
+/* ─── File chip token badges ──────────────────────────────────────────────── */
+.fp-tok {
+  font-size: 9px;
+  color: var(--text2);
+  font-family: var(--mono);
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
 
 /* ─── BUDGET SETTINGS ─────────────────────────────────────────────────────── */
 .budget-section { border-top: 1px solid var(--border); padding-top: 14px; margin-top: 4px; }
@@ -35,6 +124,7 @@
 
 /* ─── MSG COST BADGE ──────────────────────────────────────────────────────── */
 .msg-cost { font-size: 10px; color: var(--accent); font-family: var(--mono); }
+.msg-tok-est { font-size: 10px; color: var(--text3); font-family: var(--mono); cursor: help; }
 
 /* ─── BUDGET WARNING BANNER ───────────────────────────────────────────────── */
 .budget-warning {
@@ -49,6 +139,9 @@
 .budget-warning .dismiss-btn:hover { opacity: 1; }
 
 @media (max-width: 480px) {
-  #costPreview { font-size: 9px; padding: 0 2px; }
+  .cost-preview { font-size: 9px; padding: 2px 2px 0; }
+  .cp-dim { font-size: 8px; }
+  .cp-model, .cp-pricing { display: none; }
+  .fp-tok { font-size: 8px; padding: 1px 4px; }
   .budget-fields { grid-template-columns: 1fr; }
 }

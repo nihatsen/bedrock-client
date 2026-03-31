@@ -115,9 +115,29 @@ function appendMsgEl(msg, isStreaming = false, returnOnly = false) {
 
   const usageStr = msg.usage ? _formatUsageWithCost(msg) : '';
 
+  // ── Token estimate for user messages ──────────────────────────────────
+  let tokEstStr = '';
+  if (msg.role === 'user' && typeof estimateMessageTokens === 'function') {
+    const est = estimateMessageTokens(msg);
+    let tip = `Estimated tokens: ~${est.toLocaleString()}`;
+    const textTok = typeof estimateTextTokens === 'function' ? estimateTextTokens(msg.text) : 0;
+    tip += `\n  Text: ~${textTok.toLocaleString()}`;
+    if (msg.files?.length) {
+      let fileTok = 0;
+      for (const f of msg.files) {
+        const ft = typeof estimateFileTokens === 'function' ? estimateFileTokens(f) : 0;
+        fileTok += ft;
+        tip += `\n  ${f.name || f.type}: ~${ft.toLocaleString()}`;
+      }
+      tip += `\n  Files total: ~${fileTok.toLocaleString()}`;
+    }
+    tokEstStr = `<span class="msg-tok-est" title="${esc(tip)}">~${tokStr(est)} tok</span>`;
+  }
+
   header.innerHTML = `
     <span class="role-badge">${msg.role === 'user' ? '👤 You' : `◈ ${esc(modelLabel)}`}</span>
     <span class="msg-time">${fmtTime(msg.createdAt)}</span>
+    ${tokEstStr}
     ${usageStr ? `<span class="msg-usage">${usageStr}</span>` : ''}`;
 
   const actions = document.createElement('div');
@@ -228,6 +248,7 @@ function appendMsgEl(msg, isStreaming = false, returnOnly = false) {
 
   return row;
 }
+
 
 function _buildAttachmentCard(icon, title, file, viewable) {
   const text = viewable ? decodeBase64UTF8(file.data) : null;

@@ -1,11 +1,11 @@
 // public/js/context.js — Client-side context optimization
 //
-// Before each request, this module:
-//  1. Strips base64 file data from old messages (massive bandwidth + token saving)
-//  2. Replaces stripped files with short text references
-//  3. Truncates long old text messages
-//  4. Drops very old messages, replacing with a topic summary
-//  5. Keeps the most recent N messages in full for highest quality output
+// OPTIMIZATIONS (in order of token savings):
+//  1. Strips base64 file data from old messages     (~100K–500K tokens per old image)
+//  2. Compresses code blocks in old assistant msgs   (~500–5K tokens per code block)
+//  3. Truncates long old text messages               (~200–2K tokens per message)
+//  4. Drops very old messages with summary           (~500–10K tokens saved)
+//  5. Keeps recent N messages in full for quality
 
 /**
  * Prepare conversation messages for sending to the API.
@@ -32,8 +32,8 @@ function prepareMessagesForSend(rawMessages) {
   const aggressive   = mode === 'aggressive';
   const recentCount  = aggressive ? 4  : (settings.contextRecentCount  || 6);
   const maxContext    = aggressive ? 16 : (settings.contextMaxMessages  || 40);
-  const maxOldChars  = aggressive ? 250 : 600;
-  const maxOldAssist = aggressive ? 400 : 800;
+  const maxOldUser   = aggressive ? 200  : 500;
+  const maxOldAssist = aggressive ? 300  : 800;
 
   // Small conversation — no optimization needed
   if (messages.length <= recentCount) {
@@ -73,7 +73,7 @@ function prepareMessagesForSend(rawMessages) {
     }
   }
 
-  // ── 2. Old-but-kept messages: strip files, truncate text ───────────────
+  // ── 2. Old-but-kept messages: strip files, compress code, truncate ─────
   for (const m of oldKept) {
     let text = m.text || '';
 
@@ -83,8 +83,14 @@ function prepareMessagesForSend(rawMessages) {
       text = refs + (text ? '\n' + text : '');
     }
 
-    // Truncate long text
-    const limit = m.role === 'assistant' ? maxOldAssist : maxOldChars;
+    // For assistant messages: compress code blocks to one-line summaries
+    // This is the 2nd biggest saver — a 150-line code block becomes ~20 chars
+    if (m.role === 'assistant') {
+      text = _compressCodeBlocks(text);
+    }
+
+    // Truncate remaining long text
+    const limit = m.role === 'assistant' ? maxOldAssist : maxOldUser;
     if (text.length > limit) {
       const half = Math.floor((limit - 40) / 2);
       text = text.slice(0, half) + '\n[…truncated…]\n' + text.slice(-half);
@@ -110,7 +116,6 @@ function prepareMessagesForSend(rawMessages) {
     ? Math.round(((origTotal - optTotal) / origTotal) * 100)
     : 0;
 
-  // Estimate token savings (rough: 1 token ≈ 3.5 chars for text, file data is base64)
   const origTokenEst = Math.ceil(origChars / 3.5) + Math.ceil(origFileChars * 0.75 / 3.5);
   const optTokenEst  = Math.ceil(optChars / 3.5)  + Math.ceil(optFileChars * 0.75 / 3.5);
 
@@ -129,6 +134,27 @@ function prepareMessagesForSend(rawMessages) {
       totalSent: result.length,
     },
   };
+}
+
+// ─── Code block compression ──────────────────────────────────────────────
+// Replaces full code blocks with one-line summaries.
+// A 150-line JS file (~4K chars / ~1.1K tokens) becomes ~30 chars (~8 tokens).
+function _compressCodeBlocks(text) {
+  if (!text) return text;
+  return text.replace(/```(\w*)\n([\s\S]*?)```/g, (_match, lang, code) => {
+    const trimmed = code.trim();
+    const lines   = trimmed.split('\n').length;
+    const label   = lang ? lang.toUpperCase() : 'CODE';
+
+    // Try to extract filename from first comment line
+    const first = trimmed.split('\n')[0] || '';
+    const fnMatch = first.match(
+      /^(?:\/\/|#|\/\*+|\*|--|;)\s*(?:[Ff]ile(?:name)?:?\s*)?(?:\S+[/\\])?([a-zA-Z0-9_.][a-zA-Z0-9_.-]*\.[a-zA-Z0-9]{1,8})/
+    );
+    const fname = fnMatch ? fnMatch[1] : null;
+
+    return `[Code: ${fname || label}, ${lines} lines]`;
+  });
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────

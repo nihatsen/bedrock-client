@@ -31,6 +31,7 @@ function showBlankState() {
   setStreamingUI(false);
   renderChatList();
   closeSidePanel();
+  if (typeof scheduleCostPreview === 'function') scheduleCostPreview();
 }
 
 // ─── New Chat — just show blank page, don't create conversation ───────────
@@ -79,6 +80,8 @@ function loadConvo(id, pushHistory = true) {
   }
 
   closeSidePanel();
+  if (typeof scheduleCostPreview === 'function') scheduleCostPreview();
+  if (typeof updateBudgetDisplay === 'function') updateBudgetDisplay();
 }
 
 function deleteChat(id) {

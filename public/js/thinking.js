@@ -5,12 +5,14 @@ function toggleThinking() {
   localStorage.setItem('brc_thinking_on', String(thinkingOn));
   document.getElementById('thinkingToggle').classList.toggle('active', thinkingOn);
   document.getElementById('budgetWrap').classList.toggle('hidden', !thinkingOn);
+  if (typeof scheduleCostPreview === 'function') scheduleCostPreview();
 }
 
 function updateBudgetLabel() {
   thinkingBudget = parseInt(document.getElementById('budgetSlider').value);
   localStorage.setItem('brc_thinking_budget', String(thinkingBudget));
   document.getElementById('budgetLabel').textContent = tokStr(thinkingBudget);
+  if (typeof scheduleCostPreview === 'function') scheduleCostPreview();
 }
 
 function applyThinkingState() {

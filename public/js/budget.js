@@ -1,11 +1,9 @@
-// public/js/budget.js — Token calculator, cost tracker, budget enforcement
+// public/js/budget.js — Token calculator, cost tracker, budget enforcement, LIVE preview
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PRICING DATABASE — per 1M tokens (USD), Standard On-Demand tier
-// Source: https://aws.amazon.com/bedrock/pricing/
 // ═══════════════════════════════════════════════════════════════════════════
 const MODEL_PRICING = {
-  // ── Anthropic ──────────────────────────────────────────────────────────
   'claude-sonnet-4-6':    { input: 3.00,  output: 15.00,  name: 'Sonnet 4.6'  },
   'claude-sonnet-4-5':    { input: 3.00,  output: 15.00,  name: 'Sonnet 4.5'  },
   'claude-sonnet-4-2':    { input: 3.00,  output: 15.00,  name: 'Sonnet 4'    },
@@ -21,15 +19,11 @@ const MODEL_PRICING = {
   'claude-3-sonnet':      { input: 3.00,  output: 15.00,  name: '3 Sonnet'    },
   'claude-3-opus':        { input: 15.00, output: 75.00,  name: '3 Opus'      },
   'claude-instant':       { input: 0.80,  output: 2.40,   name: 'Instant'     },
-
-  // ── Amazon Nova ────────────────────────────────────────────────────────
   'nova-premier':         { input: 2.50,  output: 10.00,  name: 'Nova Premier' },
   'nova-pro':             { input: 0.80,  output: 3.20,   name: 'Nova Pro'     },
   'nova-lite':            { input: 0.06,  output: 0.24,   name: 'Nova Lite'    },
   'nova-micro':           { input: 0.035, output: 0.14,   name: 'Nova Micro'   },
   'nova-2-lite':          { input: 0.04,  output: 0.16,   name: 'Nova 2 Lite'  },
-
-  // ── Meta Llama ─────────────────────────────────────────────────────────
   'llama4-maverick':      { input: 0.20,  output: 0.60,   name: 'Llama 4 Maverick' },
   'llama4-scout':         { input: 0.17,  output: 0.17,   name: 'Llama 4 Scout'    },
   'llama3-3-70b':         { input: 0.72,  output: 0.72,   name: 'Llama 3.3 70B'    },
@@ -43,35 +37,26 @@ const MODEL_PRICING = {
   'llama3-8b':            { input: 0.30,  output: 0.40,   name: 'Llama 3 8B'       },
 };
 
-// Default fallback when model not recognized
 const DEFAULT_PRICING = { input: 3.00, output: 15.00, name: 'Unknown' };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// PRICE LOOKUP — match model ID to pricing (longest substring wins)
+// PRICE LOOKUP
 // ═══════════════════════════════════════════════════════════════════════════
 function _getPricing(modelId) {
   if (!modelId) return DEFAULT_PRICING;
   const lo = modelId.toLowerCase();
-
   let bestKey = null, bestLen = 0;
   for (const key of Object.keys(MODEL_PRICING)) {
-    if (lo.includes(key) && key.length > bestLen) {
-      bestKey = key;
-      bestLen = key.length;
-    }
+    if (lo.includes(key) && key.length > bestLen) { bestKey = key; bestLen = key.length; }
   }
   if (bestKey) return MODEL_PRICING[bestKey];
-
-  // Fallback heuristics
   if (lo.includes('claude'))  return { input: 3.00,  output: 15.00, name: 'Claude' };
   if (lo.includes('nova'))    return { input: 0.80,  output: 3.20,  name: 'Nova'   };
   if (lo.includes('llama'))   return { input: 0.72,  output: 0.72,  name: 'Llama'  };
   return DEFAULT_PRICING;
 }
 
-function getPricingForModel(modelId) {
-  return _getPricing(modelId);
-}
+function getPricingForModel(modelId) { return _getPricing(modelId); }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TOKEN ESTIMATION
@@ -98,43 +83,31 @@ function estimateFileTokens(file) {
   return 100;
 }
 
+/** Public helper — used by input.js to show per-file token badges */
+function getFileTokenEstimate(file) {
+  return estimateFileTokens(file);
+}
+
 function estimateMessageTokens(msg) {
   let tokens = 0;
   tokens += estimateTextTokens(msg.text);
-  if (msg.files) {
-    for (const f of msg.files) tokens += estimateFileTokens(f);
-  }
-  tokens += 10;
+  if (msg.files) { for (const f of msg.files) tokens += estimateFileTokens(f); }
+  tokens += 10; // per-message overhead
   return tokens;
 }
 
 function estimateConversationTokens(messages, newText, newFiles, systemPrompt) {
   let inputTokens = 0;
-
   const systemTokens = estimateTextTokens(systemPrompt);
   inputTokens += systemTokens;
-
   let historyTokens = 0;
-  for (const msg of messages) {
-    const t = estimateMessageTokens(msg);
-    historyTokens += t;
-  }
+  for (const msg of messages) historyTokens += estimateMessageTokens(msg);
   inputTokens += historyTokens;
-
   let newMsgTokens = estimateTextTokens(newText);
-  if (newFiles) {
-    for (const f of newFiles) newMsgTokens += estimateFileTokens(f);
-  }
+  if (newFiles) { for (const f of newFiles) newMsgTokens += estimateFileTokens(f); }
   newMsgTokens += 10;
   inputTokens += newMsgTokens;
-
-  return {
-    inputTokens,
-    newMsgTokens,
-    historyTokens,
-    systemTokens,
-    messageCount: messages.length + 1,
-  };
+  return { inputTokens, newMsgTokens, historyTokens, systemTokens, messageCount: messages.length + 1 };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -162,14 +135,9 @@ function formatUSD(amount) {
 const BUDGET_KEY   = 'brc_budget';
 const COST_LOG_KEY = 'brc_cost_log';
 
-function _loadBudget() {
-  try { return JSON.parse(localStorage.getItem(BUDGET_KEY) || '{}'); } catch(e) { return {}; }
-}
+function _loadBudget() { try { return JSON.parse(localStorage.getItem(BUDGET_KEY) || '{}'); } catch(e) { return {}; } }
 function _saveBudget(b) { localStorage.setItem(BUDGET_KEY, JSON.stringify(b)); }
-
-function _loadCostLog() {
-  try { return JSON.parse(localStorage.getItem(COST_LOG_KEY) || '{}'); } catch(e) { return {}; }
-}
+function _loadCostLog() { try { return JSON.parse(localStorage.getItem(COST_LOG_KEY) || '{}'); } catch(e) { return {}; } }
 function _saveCostLog(log) {
   const keys = Object.keys(log).sort();
   while (keys.length > 90) { delete log[keys.shift()]; }
@@ -180,13 +148,11 @@ function recordCost(inputTokens, outputTokens, modelId) {
   const { totalCost } = calculateCost(inputTokens, outputTokens, modelId);
   const today = new Date().toISOString().slice(0, 10);
   const log = _loadCostLog();
-
   if (!log[today]) log[today] = { cost: 0, inputTokens: 0, outputTokens: 0, requests: 0 };
   log[today].cost         += totalCost;
   log[today].inputTokens  += (inputTokens || 0);
   log[today].outputTokens += (outputTokens || 0);
   log[today].requests     += 1;
-
   _saveCostLog(log);
   return totalCost;
 }
@@ -195,15 +161,10 @@ function getCostStats() {
   const log   = _loadCostLog();
   const today = new Date().toISOString().slice(0, 10);
   const todayData = log[today] || { cost: 0, inputTokens: 0, outputTokens: 0, requests: 0 };
-
   let totalCost = 0, totalInput = 0, totalOutput = 0, totalReqs = 0;
   for (const day of Object.values(log)) {
-    totalCost   += day.cost;
-    totalInput  += day.inputTokens;
-    totalOutput += day.outputTokens;
-    totalReqs   += day.requests;
+    totalCost += day.cost; totalInput += day.inputTokens; totalOutput += day.outputTokens; totalReqs += day.requests;
   }
-
   return {
     today: todayData,
     total: { cost: totalCost, inputTokens: totalInput, outputTokens: totalOutput, requests: totalReqs },
@@ -216,132 +177,297 @@ function getCostStats() {
 function getBudgetLimits() {
   const b = _loadBudget();
   return {
-    dailyUSD:      b.dailyUSD      ?? 0,
-    overallUSD:    b.overallUSD    ?? 0,
-    dailyTokens:   b.dailyTokens   ?? 0,
-    overallTokens: b.overallTokens ?? 0,
-    enabled:       b.enabled       ?? false,
+    dailyUSD: b.dailyUSD ?? 0, overallUSD: b.overallUSD ?? 0,
+    dailyTokens: b.dailyTokens ?? 0, overallTokens: b.overallTokens ?? 0,
+    enabled: b.enabled ?? false,
   };
 }
-
-function saveBudgetLimits(limits) {
-  _saveBudget(limits);
-  updateBudgetDisplay();
-}
-
-function resetCostLog() {
-  localStorage.removeItem(COST_LOG_KEY);
-  updateBudgetDisplay();
-  toast('Cost log reset', 'success');
-}
+function saveBudgetLimits(limits) { _saveBudget(limits); updateBudgetDisplay(); }
+function resetCostLog() { localStorage.removeItem(COST_LOG_KEY); updateBudgetDisplay(); toast('Cost log reset', 'success'); }
 
 function checkBudget(estimatedInputTokens, modelId) {
   const limits = getBudgetLimits();
   if (!limits.enabled) return { allowed: true, reason: null, warning: null };
-
-  const stats   = getCostStats();
+  const stats = getCostStats();
   const pricing = _getPricing(modelId);
   const estOutputTokens = 2000;
-  const estCost = ((estimatedInputTokens / 1_000_000) * pricing.input) +
-                  ((estOutputTokens / 1_000_000) * pricing.output);
+  const estCost = ((estimatedInputTokens / 1_000_000) * pricing.input) + ((estOutputTokens / 1_000_000) * pricing.output);
 
   if (limits.dailyUSD > 0) {
-    if (stats.today.cost >= limits.dailyUSD) {
+    if (stats.today.cost >= limits.dailyUSD)
       return { allowed: false, reason: `Daily budget exceeded (${formatUSD(stats.today.cost)} / ${formatUSD(limits.dailyUSD)})` };
-    }
-    if ((stats.today.cost + estCost) > limits.dailyUSD * 0.9) {
+    if ((stats.today.cost + estCost) > limits.dailyUSD * 0.9)
       return { allowed: true, warning: `Approaching daily limit (${formatUSD(stats.today.cost)} / ${formatUSD(limits.dailyUSD)})` };
-    }
   }
-
-  if (limits.overallUSD > 0 && stats.total.cost >= limits.overallUSD) {
+  if (limits.overallUSD > 0 && stats.total.cost >= limits.overallUSD)
     return { allowed: false, reason: `Overall budget exceeded (${formatUSD(stats.total.cost)} / ${formatUSD(limits.overallUSD)})` };
-  }
-
   if (limits.dailyTokens > 0) {
     const todayTok = stats.today.inputTokens + stats.today.outputTokens;
-    if (todayTok >= limits.dailyTokens) {
+    if (todayTok >= limits.dailyTokens)
       return { allowed: false, reason: `Daily token limit exceeded (${tokStr(todayTok)} / ${tokStr(limits.dailyTokens)})` };
-    }
   }
-
   if (limits.overallTokens > 0) {
     const totalTok = stats.total.inputTokens + stats.total.outputTokens;
-    if (totalTok >= limits.overallTokens) {
+    if (totalTok >= limits.overallTokens)
       return { allowed: false, reason: `Overall token limit exceeded (${tokStr(totalTok)} / ${tokStr(limits.overallTokens)})` };
-    }
   }
-
   return { allowed: true, reason: null, warning: null };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// PRE-SEND COST PREVIEW
+// DETAILED TOKEN ESTIMATE  — single source of truth for the live preview
+// ═══════════════════════════════════════════════════════════════════════════
+function getDetailedEstimate() {
+  const input   = document.getElementById('msgInput');
+  const text    = input?.value || '';
+  const modelSel = document.getElementById('modelSelect');
+  const modelId  = modelSel?.value || currentModelId || '';
+  const opt      = modelSel?.selectedOptions[0];
+  const pricing  = _getPricing(modelId);
+  const canThink = opt?.dataset.supportsThinking === 'true';
+
+  // ── New message ────────────────────────────────────────────────────────
+  const newTextTok  = estimateTextTokens(text);
+  let newFileTok    = 0;
+  const fileDetails = [];
+  for (const f of pendingFiles) {
+    const ft = estimateFileTokens(f);
+    newFileTok += ft;
+    fileDetails.push({ name: f.name || f.type || 'file', tokens: ft, type: f.type });
+  }
+  const newMsgTok = newTextTok + newFileTok + (text.trim() || pendingFiles.length ? 10 : 0);
+
+  // ── System prompt ──────────────────────────────────────────────────────
+  const systemTok = estimateTextTokens(settings.system || '');
+
+  // ── History — raw (before optimization) ────────────────────────────────
+  let rawMessages = [];
+  if (currentConvoId) {
+    const convo = getConvo(currentConvoId);
+    if (convo) rawMessages = convo.messages.filter(m => !m._error);
+  }
+
+  let rawHistTok = 0;
+  for (const m of rawMessages) rawHistTok += estimateMessageTokens(m);
+
+  // ── History — optimized (what actually gets sent) ──────────────────────
+  let optHistTok = 0, ctxStats = null;
+  if (rawMessages.length > 0 && typeof prepareMessagesForSend === 'function') {
+    const result = prepareMessagesForSend(rawMessages);
+    ctxStats = result.stats;
+    for (const m of result.messages) {
+      optHistTok += estimateTextTokens(m.text);
+      if (m.files) for (const f of m.files) optHistTok += estimateFileTokens(f);
+      optHistTok += 10;
+    }
+  } else {
+    optHistTok = rawHistTok;
+  }
+
+  const savedTok = Math.max(0, rawHistTok - optHistTok);
+
+  // ── Totals ─────────────────────────────────────────────────────────────
+  const totalInput  = systemTok + optHistTok + newMsgTok;
+  const thinkBudget = (thinkingOn && canThink) ? thinkingBudget : 0;
+  const estOutput   = Math.min(4000, (settings.maxTokens || 16000) / 4);
+  const totalEstOut = estOutput + thinkBudget;
+
+  // ── Cost ───────────────────────────────────────────────────────────────
+  const inputCost  = (totalInput  / 1_000_000) * pricing.input;
+  const outputCost = (totalEstOut / 1_000_000) * pricing.output;
+  const totalCost  = inputCost + outputCost;
+
+  // ── Budget ─────────────────────────────────────────────────────────────
+  const limits = getBudgetLimits();
+  const stats  = getCostStats();
+
+  return {
+    newMsg:   { text: newTextTok, files: newFileTok, total: newMsgTok, fileDetails },
+    history:  { raw: rawHistTok, optimized: optHistTok, saved: savedTok, msgCount: rawMessages.length, ctxStats },
+    system:   systemTok,
+    input:    totalInput,
+    thinking: thinkBudget,
+    output:   { estimated: estOutput, withThinking: totalEstOut },
+    cost:     { input: inputCost, output: outputCost, total: totalCost, pricing },
+    budget:   { limits, stats },
+    modelId,
+    hasContent: !!(text.trim() || pendingFiles.length),
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LIVE COST PREVIEW — comprehensive real-time display
 // ═══════════════════════════════════════════════════════════════════════════
 let _previewTimer = null;
 
 function updateCostPreview() {
-  const el = document.getElementById('costPreview');
-  if (!el) return;
+  const container = document.getElementById('costPreview');
+  const rowMain   = document.getElementById('cpRowMain');
+  const rowDetail = document.getElementById('cpRowDetail');
+  if (!container || !rowMain) return;
 
-  const input = document.getElementById('msgInput');
-  const text  = input?.value || '';
+  const d = getDetailedEstimate();
 
-  if (!text.trim() && !pendingFiles.length) {
-    el.style.display = 'none';
+  if (!d.hasContent) {
+    container.classList.remove('visible');
+    const toggleBtn = document.getElementById('cpToggleBtn');
+    if (toggleBtn) toggleBtn.classList.remove('has-content');
     return;
   }
 
-  const modelId = document.getElementById('modelSelect')?.value || currentModelId || '';
-  const pricing = _getPricing(modelId);
+  const pr = d.cost.pricing;
 
-  let messages = [];
-  if (currentConvoId) {
-    const convo = getConvo(currentConvoId);
-    if (convo) messages = convo.messages.filter(m => !m._error);
+  // ═══════════════════════════════════════════════════════════════════════
+  // ROW 1 — Main breakdown:
+  //   ✏ 245 tok  +  💬 3.2k (12 msgs)  +  📋 120  →  3.6k in  ·  ~4k out  ·  💰 $0.012
+  // ═══════════════════════════════════════════════════════════════════════
+  const p = [];
+
+  // New message
+  let newTip = `New message: ~${d.newMsg.total.toLocaleString()} tokens\n`;
+  newTip += `  Text: ~${d.newMsg.text.toLocaleString()} tok`;
+  if (d.newMsg.fileDetails.length) {
+    newTip += `\n  Files (${d.newMsg.fileDetails.length}): ~${d.newMsg.files.toLocaleString()} tok`;
+    for (const fd of d.newMsg.fileDetails) newTip += `\n    ${fd.name}: ~${fd.tokens.toLocaleString()} tok`;
+  }
+  let newLabel = `✏ ${tokStr(d.newMsg.total)}`;
+  if (d.newMsg.files > 0) {
+    newLabel += ` <span class="cp-dim">(txt:${tokStr(d.newMsg.text)}+${d.newMsg.fileDetails.length}f:${tokStr(d.newMsg.files)})</span>`;
+  }
+  p.push(`<span class="cp-chip cp-new" title="${esc(newTip)}">${newLabel}</span>`);
+
+  // History
+  if (d.history.msgCount > 0) {
+    let histTip = `Chat history: ~${d.history.optimized.toLocaleString()} tokens (${d.history.msgCount} messages)`;
+    if (d.history.saved > 100) {
+      histTip += `\nRaw (unoptimized): ~${d.history.raw.toLocaleString()} tokens`;
+      histTip += `\nSaved by optimization: ~${d.history.saved.toLocaleString()} tokens`;
+      if (d.history.ctxStats) {
+        if (d.history.ctxStats.dropped) histTip += `\n  ${d.history.ctxStats.dropped} msg(s) summarized`;
+        if (d.history.ctxStats.truncated) histTip += `\n  ${d.history.ctxStats.truncated} msg(s) compressed`;
+        histTip += `\n  ${d.history.ctxStats.full} msg(s) sent in full`;
+      }
+    }
+    let histLabel = `💬 ${tokStr(d.history.optimized)}`;
+    histLabel += ` <span class="cp-dim">(${d.history.msgCount}msg${d.history.msgCount > 1 ? 's' : ''}`;
+    if (d.history.saved > 100) histLabel += ` ⚡-${tokStr(d.history.saved)}`;
+    histLabel += `)</span>`;
+    p.push(`<span class="cp-sep">+</span>`);
+    p.push(`<span class="cp-chip cp-hist" title="${esc(histTip)}">${histLabel}</span>`);
   }
 
-  const est = estimateConversationTokens(messages, text, pendingFiles, settings.system || '');
-
-  const thinkBudget = (thinkingOn &&
-    document.getElementById('modelSelect')?.selectedOptions[0]?.dataset.supportsThinking === 'true')
-    ? thinkingBudget : 0;
-
-  const estOutput     = Math.min(4000, (settings.maxTokens || 16000) / 4);
-  const totalEstOut   = estOutput + thinkBudget;
-  const inputCost     = (est.inputTokens / 1_000_000) * pricing.input;
-  const outputCost    = (totalEstOut / 1_000_000) * pricing.output;
-  const totalCost     = inputCost + outputCost;
-
-  const limits = getBudgetLimits();
-  const stats  = getCostStats();
-  let budgetNote = '';
-  if (limits.enabled && limits.dailyUSD > 0) {
-    const remaining = Math.max(0, limits.dailyUSD - stats.today.cost);
-    budgetNote = ` · ${formatUSD(remaining)} left today`;
+  // System
+  if (d.system > 0) {
+    p.push(`<span class="cp-sep">+</span>`);
+    p.push(`<span class="cp-chip cp-sys" title="System prompt: ~${d.system.toLocaleString()} tokens">📋 ${tokStr(d.system)}</span>`);
   }
 
-  el.style.display = '';
-  el.innerHTML =
-    `<span class="cost-preview-tokens">~${tokStr(est.inputTokens)} in</span>` +
-    `<span class="cost-preview-sep">·</span>` +
-    `<span class="cost-preview-history">${est.messageCount} msgs</span>` +
-    `<span class="cost-preview-sep">·</span>` +
-    `<span class="cost-preview-cost">≈ ${formatUSD(totalCost)}</span>` +
-    `<span class="cost-preview-sep">·</span>` +
-    `<span class="cost-preview-tokens">${pricing.name || 'model'}</span>` +
-    (budgetNote ? `<span class="cost-preview-budget">${budgetNote}</span>` : '') +
-    (est.historyTokens > est.newMsgTokens * 3 && est.historyTokens > 5000
-      ? `<span class="cost-preview-warn"> · ⚠ ${tokStr(est.historyTokens)} history</span>` : '');
+  // Total input
+  const totalTip = `Total input tokens: ~${d.input.toLocaleString()}\n` +
+    `  New message: ~${d.newMsg.total.toLocaleString()}\n` +
+    `  History: ~${d.history.optimized.toLocaleString()}\n` +
+    `  System: ~${d.system.toLocaleString()}\n` +
+    `  Overhead: ~${10}`;
+  p.push(`<span class="cp-sep">→</span>`);
+  p.push(`<span class="cp-chip cp-total" title="${esc(totalTip)}">⟶ ${tokStr(d.input)} in</span>`);
+
+  // Thinking
+  if (d.thinking > 0) {
+    p.push(`<span class="cp-sep">·</span>`);
+    p.push(`<span class="cp-chip cp-think" title="Extended thinking budget: ${tokStr(d.thinking)} tokens (counted as output)">🧠 ${tokStr(d.thinking)}</span>`);
+  }
+
+  // Estimated output
+  const outTip = `Estimated output: ~${d.output.withThinking.toLocaleString()} tokens\n` +
+    `  Response: ~${d.output.estimated.toLocaleString()}\n` +
+    (d.thinking > 0 ? `  Thinking: ~${d.thinking.toLocaleString()}\n` : '') +
+    `(Actual may vary significantly)`;
+  p.push(`<span class="cp-sep">·</span>`);
+  p.push(`<span class="cp-chip cp-out" title="${esc(outTip)}">~${tokStr(d.output.withThinking)} out</span>`);
+
+  // Cost
+  const costTip = `Estimated cost: ${formatUSD(d.cost.total)}\n` +
+    `  Input:  ${tokStr(d.input)} × $${pr.input}/1M = ${formatUSD(d.cost.input)}\n` +
+    `  Output: ~${tokStr(d.output.withThinking)} × $${pr.output}/1M = ~${formatUSD(d.cost.output)}\n` +
+    `Model: ${pr.name} ($${pr.input}/$${pr.output} per 1M in/out)`;
+  p.push(`<span class="cp-sep">·</span>`);
+  p.push(`<span class="cp-chip cp-cost" title="${esc(costTip)}">💰 ≈ ${formatUSD(d.cost.total)}</span>`);
+
+  rowMain.innerHTML = p.join('');
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // ROW 2 — Detail: savings, budget, model pricing
+  // ═══════════════════════════════════════════════════════════════════════
+  if (rowDetail) {
+    const d2 = [];
+
+    // Savings
+    if (d.history.saved > 100 && d.history.ctxStats) {
+      const cs = d.history.ctxStats;
+      let savLabel = `⚡ Saving ~${tokStr(d.history.saved)}`;
+      const savPct = d.history.raw > 0 ? Math.round((d.history.saved / d.history.raw) * 100) : 0;
+      if (savPct > 0) savLabel += ` (${savPct}%)`;
+      const details = [];
+      if (cs.dropped)   details.push(`${cs.dropped} summarized`);
+      if (cs.truncated) details.push(`${cs.truncated} compressed`);
+      details.push(`${cs.full} full`);
+      savLabel += ` <span class="cp-dim">${details.join(', ')}</span>`;
+      d2.push(`<span class="cp-chip cp-savings">${savLabel}</span>`);
+    } else if (d.history.raw > 5000 && d.history.saved <= 100) {
+      d2.push(`<span class="cp-chip cp-warn" title="Large history — consider new chat">⚠ ${tokStr(d.history.raw)} history</span>`);
+    }
+
+    // Budget
+    if (d.budget.limits.enabled && d.budget.limits.dailyUSD > 0) {
+      const remaining = Math.max(0, d.budget.limits.dailyUSD - d.budget.stats.today.cost);
+      const pct = Math.round((d.budget.stats.today.cost / d.budget.limits.dailyUSD) * 100);
+      const budgetTip = `Daily budget: ${formatUSD(d.budget.limits.dailyUSD)}\nUsed today: ${formatUSD(d.budget.stats.today.cost)} (${pct}%)\nRemaining: ${formatUSD(remaining)}`;
+      d2.push(`<span class="cp-chip cp-budget" title="${esc(budgetTip)}">📊 ${formatUSD(remaining)} left today (${pct}%)</span>`);
+    }
+
+    // Model & pricing
+    d2.push(`<span class="cp-chip cp-pricing" title="$${pr.input} per 1M input · $${pr.output} per 1M output">${pr.name} · $${pr.input}/$${pr.output}</span>`);
+
+    rowDetail.innerHTML = d2.join('<span class="cp-sep">·</span>');
+  }
+
+  container.classList.add('visible');
+
+  // Show the toggle button now that there's content
+  const toggleBtn = document.getElementById('cpToggleBtn');
+  if (toggleBtn) toggleBtn.classList.add('has-content');
+
+  // Apply collapsed state (runs every update so state is always consistent)
+  _applyCostPreviewCollapsed();
+
 }
 
 function scheduleCostPreview() {
   clearTimeout(_previewTimer);
-  _previewTimer = setTimeout(updateCostPreview, 300);
+  _previewTimer = setTimeout(updateCostPreview, 150);
 }
 
+// ─── Cost preview toggle ───────────────────────────────────────────────────
+const _CP_COLLAPSED_KEY = 'brc_cp_collapsed';
+let _cpCollapsed = localStorage.getItem(_CP_COLLAPSED_KEY) === 'true';
+
+function toggleCostPreview() {
+  _cpCollapsed = !_cpCollapsed;
+  localStorage.setItem(_CP_COLLAPSED_KEY, String(_cpCollapsed));
+  _applyCostPreviewCollapsed();
+}
+
+function _applyCostPreviewCollapsed() {
+  const wrap = document.getElementById('costPreviewWrap');
+  const icon = document.getElementById('cpToggleIcon');
+  if (!wrap) return;
+  wrap.classList.toggle('collapsed', _cpCollapsed);
+  if (icon) icon.textContent = _cpCollapsed ? '◉' : '◎';
+}
+
+
 // ═══════════════════════════════════════════════════════════════════════════
-// TOPBAR BUDGET DISPLAY
+// TOPBAR BUDGET DISPLAY — enhanced with per-conversation info
 // ═══════════════════════════════════════════════════════════════════════════
 function updateBudgetDisplay() {
   const el = document.getElementById('tokenDisplay');
@@ -351,16 +477,35 @@ function updateBudgetDisplay() {
   const limits = getBudgetLimits();
   const td     = stats.today;
   const tt     = stats.total;
-
   const todayTok = td.inputTokens + td.outputTokens;
-  let text = `Today: ${tokStr(todayTok)} tok · ${formatUSD(td.cost)}`;
+
+  // Current conversation token count
+  let convoTok = 0, convoMsgs = 0;
+  if (currentConvoId) {
+    const convo = getConvo(currentConvoId);
+    if (convo) {
+      convoMsgs = convo.messages.length;
+      for (const m of convo.messages) convoTok += estimateMessageTokens(m);
+    }
+  }
+
+  let text = '';
+  if (convoMsgs > 0) text += `Chat: ~${tokStr(convoTok)} · `;
+  text += `Today: ${tokStr(todayTok)} · ${formatUSD(td.cost)}`;
   if (limits.enabled && limits.dailyUSD > 0) {
     const pct = Math.min(100, Math.round((td.cost / limits.dailyUSD) * 100));
     text += ` (${pct}%)`;
   }
   el.textContent = text;
 
-  let tip = `TODAY:\n`;
+  // Detailed tooltip
+  let tip = '';
+  if (convoMsgs > 0) {
+    tip += `THIS CHAT:\n`;
+    tip += `  Messages: ${convoMsgs}\n`;
+    tip += `  Estimated tokens: ~${convoTok.toLocaleString()}\n\n`;
+  }
+  tip += `TODAY:\n`;
   tip += `  Input: ${td.inputTokens.toLocaleString()} tokens\n`;
   tip += `  Output: ${td.outputTokens.toLocaleString()} tokens\n`;
   tip += `  Cost: ${formatUSD(td.cost)} (${td.requests} requests)\n`;
@@ -383,7 +528,5 @@ function updateBudgetDisplay() {
     if (ratio >= 1)        el.style.color = 'var(--pink)';
     else if (ratio >= 0.8) el.style.color = 'var(--orange)';
     else                   el.style.color = '';
-  } else {
-    el.style.color = '';
-  }
+  } else { el.style.color = ''; }
 }

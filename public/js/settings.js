@@ -12,6 +12,11 @@ function syncSettingsForm() {
     if (tv) tv.textContent = settings.temperature || 0.7;
   }
 
+  // Context optimization settings
+  if (el('settingsContextMode'))   el('settingsContextMode').value   = settings.contextMode          || 'smart';
+  if (el('settingsContextRecent')) el('settingsContextRecent').value = settings.contextRecentCount    || 6;
+  if (el('settingsContextMax'))    el('settingsContextMax').value    = settings.contextMaxMessages    || 40;
+
   // Budget settings
   const limits = getBudgetLimits();
   if (el('budgetEnabled'))       el('budgetEnabled').checked   = limits.enabled;
@@ -62,6 +67,11 @@ function saveSettings() {
   settings.maxTokens   = parseInt(document.getElementById('settingsMaxTokens')?.value)   || 16000;
   settings.system      = document.getElementById('settingsSystem')?.value.trim()         || '';
   settings.temperature = parseFloat(document.getElementById('settingsTemp')?.value       || 0.7);
+
+  // Context optimization
+  settings.contextMode         = document.getElementById('settingsContextMode')?.value   || 'smart';
+  settings.contextRecentCount  = parseInt(document.getElementById('settingsContextRecent')?.value) || 6;
+  settings.contextMaxMessages  = parseInt(document.getElementById('settingsContextMax')?.value)    || 40;
 
   localStorage.setItem('brc_settings', JSON.stringify(settings));
 

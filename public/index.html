@@ -135,10 +135,20 @@
             </button>
           </div>
         </div>
-        <div id="costPreview"></div>
+		
+        <div class="cost-preview-wrap" id="costPreviewWrap">
+          <div class="cost-preview" id="costPreview">
+            <div class="cp-row cp-row-main" id="cpRowMain"></div>
+            <div class="cp-row cp-row-detail" id="cpRowDetail"></div>
+          </div>
+        </div>
+
         <div class="input-hint">
+          <button class="cp-toggle-btn" id="cpToggleBtn" onclick="toggleCostPreview()" title="Toggle token preview"><span id="cpToggleIcon">◎</span></button>
           <span>Enter to send · Shift+Enter for newline · Paste or drag files</span>
         </div>
+
+		
         <input type="file" id="fileInput" multiple style="display:none"
           accept=".pdf,.txt,.md,.csv,.json,.js,.py,.ts,.html,.css,.xml,.yaml,.yml,.sh,.rs,.go,.java,.cpp,.c,.rb,image/png,image/jpeg,image/gif,image/webp"
           onchange="handleFileSelect(event)">
@@ -230,6 +240,30 @@
           <span id="tempVal">0.7</span>
         </div>
       </div>
+
+      <div class="form-group">
+        <label>Context Optimization</label>
+        <select class="form-input" id="settingsContextMode">
+          <option value="smart">Smart — strips old files, compresses code (recommended)</option>
+          <option value="aggressive">Aggressive — smaller window, lowest cost</option>
+          <option value="full">Full — no optimization (highest cost)</option>
+        </select>
+      </div>
+	  
+      <div class="form-row">
+        <div class="form-group">
+          <label>Recent full msgs</label>
+          <input type="number" class="form-input" id="settingsContextRecent" value="6" min="2" max="20" step="1">
+        </div>
+        <div class="form-group">
+          <label>Max history msgs</label>
+          <input type="number" class="form-input" id="settingsContextMax" value="40" min="6" max="60" step="2">
+        </div>
+      </div>
+
+
+
+
       <div class="form-group budget-section">
         <div class="budget-toggle">
           <input type="checkbox" id="budgetEnabled" onchange="_updateBudgetFieldsVis()">
@@ -293,6 +327,7 @@
 <script defer src="/js/state.js"></script>
 <script defer src="/js/utils.js"></script>
 <script defer src="/js/budget.js"></script>
+<script defer src="/js/context.js"></script>
 <script defer src="/js/conversations.js"></script>
 <script defer src="/js/thinking.js"></script>
 <script defer src="/js/artifacts.js"></script>

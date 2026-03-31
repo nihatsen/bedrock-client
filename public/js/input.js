@@ -6,50 +6,19 @@ const PASTE_THRESHOLD_LINES = 8;
 function initDragDrop() {
   const overlay = document.getElementById('dropOverlay');
   let hideOverlayTimer = null;
+  const showOverlay = () => { overlay.classList.add('visible'); clearTimeout(hideOverlayTimer); hideOverlayTimer = setTimeout(() => overlay.classList.remove('visible'), 200); };
+  const hideOverlayNow = () => { clearTimeout(hideOverlayTimer); overlay.classList.remove('visible'); };
 
-  const showOverlay = () => {
-    overlay.classList.add('visible');
-    clearTimeout(hideOverlayTimer);
-    hideOverlayTimer = setTimeout(() => overlay.classList.remove('visible'), 200);
-  };
-  const hideOverlayNow = () => {
-    clearTimeout(hideOverlayTimer);
-    overlay.classList.remove('visible');
-  };
-
-  document.addEventListener('dragenter', e => {
-    if (e.dataTransfer?.types?.includes('Files')) e.preventDefault();
-  });
-  document.addEventListener('dragover', e => {
-    if (!e.dataTransfer?.types?.includes('Files')) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'copy';
-    showOverlay();
-  });
-  document.addEventListener('dragleave', e => {
-    if (e.relatedTarget === null) hideOverlayNow();
-  });
-  document.addEventListener('drop', async e => {
-    e.preventDefault(); hideOverlayNow();
-    if (e.dataTransfer?.files?.length) { await uploadFiles(Array.from(e.dataTransfer.files)); return; }
-    const text = e.dataTransfer?.getData('text/plain');
-    if (text) { const inp = document.getElementById('msgInput'); inp.value += text; autoResize(inp); }
-  });
+  document.addEventListener('dragenter', e => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); });
+  document.addEventListener('dragover', e => { if (!e.dataTransfer?.types?.includes('Files')) return; e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; showOverlay(); });
+  document.addEventListener('dragleave', e => { if (e.relatedTarget === null) hideOverlayNow(); });
+  document.addEventListener('drop', async e => { e.preventDefault(); hideOverlayNow(); if (e.dataTransfer?.files?.length) { await uploadFiles(Array.from(e.dataTransfer.files)); return; } const text = e.dataTransfer?.getData('text/plain'); if (text) { const inp = document.getElementById('msgInput'); inp.value += text; autoResize(inp); scheduleCostPreview(); } });
 
   const box = document.getElementById('inputBox');
   if (box) {
-    box.addEventListener('dragover', e => {
-      if (e.dataTransfer?.types?.includes('Files')) {
-        e.preventDefault(); e.stopPropagation(); box.classList.add('drag-over');
-      }
-    });
-    box.addEventListener('dragleave', e => {
-      if (!box.contains(e.relatedTarget)) box.classList.remove('drag-over');
-    });
-    box.addEventListener('drop', async e => {
-      e.preventDefault(); e.stopPropagation(); box.classList.remove('drag-over'); hideOverlayNow();
-      if (e.dataTransfer?.files?.length) await uploadFiles(Array.from(e.dataTransfer.files));
-    });
+    box.addEventListener('dragover', e => { if (e.dataTransfer?.types?.includes('Files')) { e.preventDefault(); e.stopPropagation(); box.classList.add('drag-over'); } });
+    box.addEventListener('dragleave', e => { if (!box.contains(e.relatedTarget)) box.classList.remove('drag-over'); });
+    box.addEventListener('drop', async e => { e.preventDefault(); e.stopPropagation(); box.classList.remove('drag-over'); hideOverlayNow(); if (e.dataTransfer?.files?.length) await uploadFiles(Array.from(e.dataTransfer.files)); });
   }
 }
 
@@ -89,13 +58,7 @@ function initPaste() {
       e.preventDefault();
       const encoded = encodeUTF8Base64(text);
       const size = new Blob([text]).size;
-      pendingFiles.push({
-        name: 'Pasted content',
-        type: 'paste',
-        mediaType: 'text/plain',
-        data: encoded,
-        size: size,
-      });
+      pendingFiles.push({ name: 'Pasted content', type: 'paste', mediaType: 'text/plain', data: encoded, size: size });
       renderFilePreview();
       toast(`✓ Pasted as attachment (${fmtSize(size)} • ${lines.toLocaleString()} lines)`, 'success');
     }
@@ -113,10 +76,7 @@ async function uploadFiles(files) {
     pendingFiles.push(...processed);
     renderFilePreview();
     toast(`✓ ${processed.length} file${processed.length > 1 ? 's' : ''} attached`, 'success');
-  } catch (e) {
-    console.error('[upload]', e);
-    toast('Upload error: ' + e.message, 'error');
-  }
+  } catch (e) { console.error('[upload]', e); toast('Upload error: ' + e.message, 'error'); }
 }
 
 async function handleFileSelect(event) {
@@ -143,55 +103,43 @@ function renderFilePreview() {
   const bar = document.getElementById('filePreviewBar');
   if (!bar) return;
   bar.innerHTML = '';
+
   pendingFiles.forEach((f, i) => {
     const chip = document.createElement('div');
     chip.className = 'file-preview-chip' + (f.type === 'paste' ? ' paste-chip' : '');
 
+    // ── Token estimate badge (shown on every chip) ───────────────────────
+    const tokEst = typeof getFileTokenEstimate === 'function' ? getFileTokenEstimate(f) : 0;
+
     if (f.type === 'paste') {
       const text = _getFileText(f);
       const lines = text ? text.split('\n').length : 0;
-      const icon = document.createElement('span');
-      icon.className = 'fp-paste-icon'; icon.textContent = '📋';
-      const preview = document.createElement('span');
-      preview.className = 'fp-name fp-paste-preview';
+      const icon = document.createElement('span'); icon.className = 'fp-paste-icon'; icon.textContent = '📋';
+      const preview = document.createElement('span'); preview.className = 'fp-name fp-paste-preview';
       preview.textContent = (text || '').slice(0, 80).replace(/\n/g, ' ') + ((text || '').length > 80 ? '…' : '');
-      const badge = document.createElement('span');
-      badge.className = 'fp-paste-badge'; badge.textContent = 'PASTED';
-      const meta = document.createElement('span');
-      meta.className = 'fp-paste-meta';
+      const badge = document.createElement('span'); badge.className = 'fp-paste-badge'; badge.textContent = 'PASTED';
+      const meta = document.createElement('span'); meta.className = 'fp-paste-meta';
       meta.textContent = `${fmtSize(f.size)} • ${lines.toLocaleString()} lines`;
       chip.appendChild(icon); chip.appendChild(preview); chip.appendChild(badge); chip.appendChild(meta);
-      chip.addEventListener('click', e => {
-        if (e.target.closest('.remove-file')) return;
-        openPasteViewer('Pasted content', text,
-          `${fmtSize(f.size)} • ${lines.toLocaleString()} lines • Formatting may be inconsistent from source`);
-      });
+      if (tokEst > 0) { const tb = document.createElement('span'); tb.className = 'fp-tok'; tb.textContent = `~${tokStr(tokEst)} tok`; chip.appendChild(tb); }
+      chip.addEventListener('click', e => { if (e.target.closest('.remove-file')) return; openPasteViewer('Pasted content', text, `${fmtSize(f.size)} • ${lines.toLocaleString()} lines • Formatting may be inconsistent from source`); });
     } else if (f.type === 'image') {
-      const img = document.createElement('img');
-      img.src = `data:${f.mediaType};base64,${f.data}`;
-      img.className = 'fp-img';
+      const img = document.createElement('img'); img.src = `data:${f.mediaType};base64,${f.data}`; img.className = 'fp-img';
       chip.appendChild(img);
-      const name = document.createElement('span');
-      name.className = 'fp-name'; name.textContent = f.name;
+      const name = document.createElement('span'); name.className = 'fp-name'; name.textContent = f.name;
       chip.appendChild(name);
+      if (tokEst > 0) { const tb = document.createElement('span'); tb.className = 'fp-tok'; tb.textContent = `~${tokStr(tokEst)} tok`; chip.appendChild(tb); }
       chip.style.cursor = 'pointer';
-      chip.addEventListener('click', e => {
-        if (e.target.closest('.remove-file')) return;
-        openImgViewer(img.src);
-      });
+      chip.addEventListener('click', e => { if (e.target.closest('.remove-file')) return; openImgViewer(img.src); });
     } else {
       const icon = document.createElement('span'); icon.textContent = '📄';
       chip.appendChild(icon);
-      const name = document.createElement('span');
-      name.className = 'fp-name'; name.textContent = f.name;
+      const name = document.createElement('span'); name.className = 'fp-name'; name.textContent = f.name;
       chip.appendChild(name);
+      if (tokEst > 0) { const tb = document.createElement('span'); tb.className = 'fp-tok'; tb.textContent = `~${tokStr(tokEst)} tok`; chip.appendChild(tb); }
       if (f.type === 'text') {
         chip.style.cursor = 'pointer';
-        chip.addEventListener('click', e => {
-          if (e.target.closest('.remove-file')) return;
-          const text = _getFileText(f);
-          if (text) openPasteViewer(f.name, text, _getFileMeta(f));
-        });
+        chip.addEventListener('click', e => { if (e.target.closest('.remove-file')) return; const text = _getFileText(f); if (text) openPasteViewer(f.name, text, _getFileMeta(f)); });
       }
     }
 
@@ -202,7 +150,7 @@ function renderFilePreview() {
     bar.appendChild(chip);
   });
 
-  // Update cost preview when files change
+  // Always trigger cost preview update when files change
   if (typeof scheduleCostPreview === 'function') scheduleCostPreview();
 }
 
@@ -241,16 +189,15 @@ function _createScrollBtn() {
   btn.addEventListener('mouseleave', () => { btn.style.background = '#3a3a3a'; btn.style.borderColor = '#666'; });
   btn.addEventListener('click', () => scrollBottom());
   const mainPanel = document.getElementById('mainPanel');
-  if (mainPanel) mainPanel.appendChild(btn);
-  else document.body.appendChild(btn);
+  if (mainPanel) mainPanel.appendChild(btn); else document.body.appendChild(btn);
   _scrollBtn = btn;
 }
 
 function _setScrollBtnVisible(show) {
   if (!_scrollBtn) return;
-  _scrollBtn.style.opacity       = show ? '1' : '0';
+  _scrollBtn.style.opacity = show ? '1' : '0';
   _scrollBtn.style.pointerEvents = show ? 'all' : 'none';
-  _scrollBtn.style.transform     = show ? 'translateY(0)' : 'translateY(10px)';
+  _scrollBtn.style.transform = show ? 'translateY(0)' : 'translateY(10px)';
 }
 
 function initScrollWatcher() {
