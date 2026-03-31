@@ -1,5 +1,4 @@
 // public/js/init.js — FULL REPLACEMENT
-// / = blank page (no conversation), /c/{id} = existing chat
 
 function recoverInterruptedStreams() {
   let recovered = 0;
@@ -52,13 +51,11 @@ function init() {
       loadConvo(urlChatId, false);
       _replaceChatURL(urlChatId);
     } else {
-      // Chat doesn't exist or is empty — blank page
       showBlankState();
       _replaceRootURL();
       if (convo) toast('Chat not found', 'info');
     }
   } else {
-    // Root URL — blank page
     showBlankState();
     _replaceRootURL();
   }
@@ -67,10 +64,19 @@ function init() {
   initDragDrop();
   initPaste();
 
+  // Cost preview: update as user types
+  const msgInput = document.getElementById('msgInput');
+  if (msgInput) {
+    msgInput.addEventListener('input', () => {
+      if (typeof scheduleCostPreview === 'function') scheduleCostPreview();
+    });
+  }
+
+  // Initialize budget display
+  if (typeof updateBudgetDisplay === 'function') updateBudgetDisplay();
+
   if (settings.apiKey) _loadModelsBackground();
   setTimeout(() => { if (!settings.apiKey) openSettings(); }, 300);
-
-  updateTokenDisplay();
 }
 
 function _populateModelSelect(models) {
@@ -142,11 +148,10 @@ window.addEventListener('popstate', e => {
 });
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { closeSidePanel(); closeImgViewer(); closeSettings(); closePasteViewer(); }
+  if (e.key === 'Escape') { closeSidePanel(); closeImgViewer(); closeSettings(); closePasteViewer(); if (typeof _dismissBudgetWarning === 'function') _dismissBudgetWarning(); }
   if ((e.metaKey||e.ctrlKey) && e.key === ',') { e.preventDefault(); openSettings(); }
   if ((e.metaKey||e.ctrlKey) && e.key === 'n') { e.preventDefault(); newChat(); }
 });
-
 
 window.addEventListener('beforeunload', () => { saveConvos(); saveUnread(); });
 

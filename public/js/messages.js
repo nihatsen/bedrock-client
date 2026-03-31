@@ -1,6 +1,5 @@
 // public/js/messages.js — FULL REPLACEMENT
 
-// ─── Markdown cache ────────────────────────────────────────────────────────
 const _mdCache = new Map();
 const _MD_CACHE_MAX = 400;
 
@@ -19,9 +18,6 @@ function invalidateMdCache(msgId) {
 }
 function clearMdCache() { _mdCache.clear(); }
 
-// ─── Lazy code block highlighting via IntersectionObserver ─────────────────
-// Code blocks are only highlighted when they scroll into view.
-// This makes chat switching instant regardless of how many code blocks exist.
 let _codeBlockObserver = null;
 
 function _getCodeBlockObserver() {
@@ -35,7 +31,7 @@ function _getCodeBlockObserver() {
     });
   }, {
     root: document.getElementById('messagesWrap'),
-    rootMargin: '200px 0px', // pre-load 200px above/below viewport
+    rootMargin: '200px 0px',
     threshold: 0,
   });
   return _codeBlockObserver;
@@ -47,9 +43,7 @@ function _processRowCodeBlocks(row) {
   if (!textEl || !msgId) return;
   const msg = _findMsg(msgId);
   if (!msg || msg._error) return;
-  // Process code blocks (highlight, wrap, etc.)
   processCodeBlocks(textEl, msg.text);
-  // File list
   const body = row.querySelector('.msg-body');
   if (body && !row.querySelector('.file-list')) {
     const fl = buildFileList(body);
@@ -63,7 +57,6 @@ function _findMsg(msgId) {
   return getConvo(currentConvoId)?.messages.find(m => m.id === msgId) || null;
 }
 
-// ─── renderMessages — DocumentFragment, single DOM write ──────────────────
 function renderMessages(messages, activeStreamId = null) {
   const wrap  = document.getElementById('messagesWrap');
   const empty = document.getElementById('emptyState');
@@ -86,12 +79,10 @@ function renderMessages(messages, activeStreamId = null) {
 
   wrap.appendChild(frag);
 
-  // Observe assistant rows for lazy code block processing
   wrap.querySelectorAll('.msg-row.assistant:not(.streaming):not([data-code-processed])').forEach(row => {
     obs.observe(row);
   });
 
-  // Scroll to bottom
   requestAnimationFrame(() => {
     wrap.scrollTop = wrap.scrollHeight;
     userScrolledUp = false;
@@ -99,7 +90,18 @@ function renderMessages(messages, activeStreamId = null) {
   });
 }
 
-// ─── appendMsgEl ──────────────────────────────────────────────────────────
+function _formatUsageWithCost(msg) {
+  const inp = msg.usage?.inputTokens || 0;
+  const out = msg.usage?.outputTokens || 0;
+  let str = `${inp}↑ ${out}↓`;
+  if (typeof calculateCost === 'function' && (inp || out)) {
+    const modelId = msg._modelId || currentModelId;
+    const cost = calculateCost(inp, out, modelId);
+    str += ` · ${formatUSD(cost.totalCost)}`;
+  }
+  return str;
+}
+
 function appendMsgEl(msg, isStreaming = false, returnOnly = false) {
   const row = document.createElement('div');
   row.className = `msg-row ${msg.role}${isStreaming ? ' streaming' : ''}`;
@@ -110,10 +112,13 @@ function appendMsgEl(msg, isStreaming = false, returnOnly = false) {
 
   const header = document.createElement('div');
   header.className = 'msg-header';
+
+  const usageStr = msg.usage ? _formatUsageWithCost(msg) : '';
+
   header.innerHTML = `
     <span class="role-badge">${msg.role === 'user' ? '👤 You' : `◈ ${esc(modelLabel)}`}</span>
     <span class="msg-time">${fmtTime(msg.createdAt)}</span>
-    ${msg.usage ? `<span class="msg-usage">${msg.usage.inputTokens||0}↑ ${msg.usage.outputTokens||0}↓</span>` : ''}`;
+    ${usageStr ? `<span class="msg-usage">${usageStr}</span>` : ''}`;
 
   const actions = document.createElement('div');
   actions.className = 'msg-actions';
@@ -146,11 +151,9 @@ function appendMsgEl(msg, isStreaming = false, returnOnly = false) {
   const body = document.createElement('div');
   body.className = 'msg-body';
 
-  // ── File / paste / image attachments ───────────────────────────────────
   if (msg.files?.length) {
     const attachments = document.createElement('div');
     attachments.className = 'msg-attachments';
-
     msg.files.forEach(f => {
       if (f.type === 'image') {
         const img = document.createElement('img');
@@ -166,12 +169,10 @@ function appendMsgEl(msg, isStreaming = false, returnOnly = false) {
         );
         attachments.appendChild(card);
       } else {
-        // PDF or unknown — info only
         const card = _buildAttachmentCard('📄', f.name, f, false);
         attachments.appendChild(card);
       }
     });
-
     body.appendChild(attachments);
   }
 
@@ -228,7 +229,6 @@ function appendMsgEl(msg, isStreaming = false, returnOnly = false) {
   return row;
 }
 
-// ─── Build clickable attachment card ──────────────────────────────────────
 function _buildAttachmentCard(icon, title, file, viewable) {
   const text = viewable ? decodeBase64UTF8(file.data) : null;
   const lines = text ? text.split('\n').length : 0;
@@ -284,15 +284,12 @@ function _buildAttachmentCard(icon, title, file, viewable) {
   return card;
 }
 
-// ─── finalizeMsgEl ─────────────────────────────────────────────────────────
 function finalizeMsgEl(msg) {
   const row = document.querySelector(`[data-msg-id="${msg.id}"]`);
   if (!row) { invalidateMdCache(msg.id); return; }
 
-  // ── Step 1: Mark as no longer streaming (prevents late _doRender) ──────
   row.classList.remove('streaming');
 
-  // ── Step 2: Remove ALL streaming artifacts from entire row ─────────────
   row.querySelectorAll(
     '.stream-indicator, .stream-cursor, .stream-spinner-sm'
   ).forEach(el => el.remove());
@@ -309,19 +306,16 @@ function finalizeMsgEl(msg) {
     return;
   }
 
-  // ── Step 3: Render final text ──────────────────────────────────────────
   const html = renderMd(msg.text || '');
   _mdCache.set(msg.id, html);
   textEl.innerHTML = html;
   processCodeBlocks(textEl, msg.text);
   row.dataset.codeProcessed = '1';
 
-  // ── Step 4: Final safety cleanup (catches any late race-condition) ─────
   row.querySelectorAll(
     '.stream-indicator, .stream-cursor, .stream-spinner-sm'
   ).forEach(el => el.remove());
 
-  // ── Step 5: Thinking block ─────────────────────────────────────────────
   const thinkingEl = body.querySelector('.thinking-block');
 
   if (msg.thinking) {
@@ -335,11 +329,9 @@ function finalizeMsgEl(msg) {
       if (!thinkingEl.classList.contains('collapsed')) thinkingEl.classList.add('collapsed');
     }
   } else if (thinkingEl) {
-    // No thinking content — remove empty thinking block entirely
     thinkingEl.remove();
   }
 
-  // ── Step 6: Stop badge (placed before thinking block) ──────────────────
   if (msg.stopReason) {
     body.querySelector('.stop-badge')?.remove();
     const sb = document.createElement('div');
@@ -350,15 +342,13 @@ function finalizeMsgEl(msg) {
     else body.appendChild(sb);
   }
 
-  // ── Step 7: Update usage in header ─────────────────────────────────────
   if (msg.usage) {
     const hdr = row.querySelector('.msg-header');
     let u = hdr?.querySelector('.msg-usage');
     if (!u && hdr) { u = document.createElement('span'); u.className = 'msg-usage'; hdr.insertBefore(u, hdr.querySelector('.msg-actions')); }
-    if (u) u.textContent = `${msg.usage.inputTokens||0}↑ ${msg.usage.outputTokens||0}↓`;
+    if (u) u.textContent = _formatUsageWithCost(msg);
   }
 
-  // ── Step 8: File list ──────────────────────────────────────────────────
   row.querySelector('.file-list')?.remove();
   requestAnimationFrame(() => {
     const fl = buildFileList(body);
@@ -437,7 +427,6 @@ function deleteMessagePair(userMsgId) {
   convo.messages.splice(idx, count);
 
   if (convo.messages.length === 0) {
-    // No messages left — remove conversation entirely, show blank page
     const cIdx = conversations.findIndex(c => c.id === currentConvoId);
     if (cIdx !== -1) conversations.splice(cIdx, 1);
     saveConvos();
@@ -448,8 +437,6 @@ function deleteMessagePair(userMsgId) {
     renderMessages(convo.messages);
   }
 }
-
-
 
 function retryMessage(aId) {
   const convo = getConvo(currentConvoId);

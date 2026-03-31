@@ -1,0 +1,54 @@
+/* ─── COST PREVIEW ────────────────────────────────────────────────────────── */
+#costPreview {
+  display: none;
+  font-size: 10px;
+  font-family: var(--mono);
+  color: var(--text2);
+  width: 100%;
+  max-width: 760px;
+  padding: 0 4px;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  line-height: 1.6;
+}
+.cost-preview-tokens { color: var(--text1); }
+.cost-preview-sep { color: var(--text3); }
+.cost-preview-history { color: var(--text2); }
+.cost-preview-cost { color: var(--accent); font-weight: 600; }
+.cost-preview-budget { color: var(--cyan); }
+.cost-preview-warn { color: var(--orange); font-weight: 500; }
+
+/* ─── BUDGET SETTINGS ─────────────────────────────────────────────────────── */
+.budget-section { border-top: 1px solid var(--border); padding-top: 14px; margin-top: 4px; }
+.budget-toggle { display: flex; align-items: center; gap: 8px; cursor: pointer; margin-bottom: 10px; }
+.budget-toggle input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
+.budget-toggle label { font-size: 11px; font-family: var(--mono); color: var(--text1); text-transform: uppercase; letter-spacing: 0.04em; cursor: pointer; }
+.budget-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.budget-fields .form-group { margin-bottom: 0; }
+.budget-stats { margin-top: 10px; padding: 8px 10px; background: var(--bg3); border-radius: var(--radius-sm); border: 1px solid var(--border); font-family: var(--mono); font-size: 11px; color: var(--text1); line-height: 1.8; }
+.budget-stats .stat-label { color: var(--text2); }
+.budget-stats .stat-value { color: var(--text0); font-weight: 600; }
+.budget-stats .stat-cost  { color: var(--accent); }
+.budget-reset-btn { margin-top: 6px; padding: 4px 10px; border-radius: 4px; background: none; border: 1px solid var(--border); color: var(--text2); font-family: var(--mono); font-size: 10px; cursor: pointer; transition: all 0.12s; }
+.budget-reset-btn:hover { color: var(--pink); border-color: var(--pink); }
+
+/* ─── MSG COST BADGE ──────────────────────────────────────────────────────── */
+.msg-cost { font-size: 10px; color: var(--accent); font-family: var(--mono); }
+
+/* ─── BUDGET WARNING BANNER ───────────────────────────────────────────────── */
+.budget-warning {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 200;
+  padding: 6px 16px; text-align: center;
+  font-size: 12px; font-family: var(--mono); font-weight: 600;
+  animation: msgIn 0.3s ease;
+}
+.budget-warning.warn { background: rgba(232,168,122,0.15); color: var(--orange); border-bottom: 1px solid rgba(232,168,122,0.3); }
+.budget-warning.block { background: rgba(232,122,144,0.15); color: var(--pink); border-bottom: 1px solid rgba(232,122,144,0.3); }
+.budget-warning .dismiss-btn { background: none; border: none; color: inherit; cursor: pointer; margin-left: 12px; font-size: 14px; opacity: 0.6; }
+.budget-warning .dismiss-btn:hover { opacity: 1; }
+
+@media (max-width: 480px) {
+  #costPreview { font-size: 9px; padding: 0 2px; }
+  .budget-fields { grid-template-columns: 1fr; }
+}

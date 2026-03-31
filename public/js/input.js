@@ -1,5 +1,4 @@
 // public/js/input.js — FULL REPLACEMENT
-// Adds: large text paste → attachment card, clickable file/paste preview
 
 const PASTE_THRESHOLD_CHARS = 500;
 const PASTE_THRESHOLD_LINES = 8;
@@ -60,7 +59,6 @@ function initPaste() {
     const items = Array.from(e.clipboardData.items || []);
     if (!items.length) return;
 
-    // 1. Image paste — always intercept
     const imageItems = items.filter(i => i.kind === 'file' && i.type.startsWith('image/'));
     if (imageItems.length) {
       e.preventDefault();
@@ -69,7 +67,6 @@ function initPaste() {
       return;
     }
 
-    // 2. File paste
     const fileItems = items.filter(i => i.kind === 'file');
     if (fileItems.length) {
       const hasText = items.some(i => i.kind === 'string' && i.type === 'text/plain');
@@ -81,7 +78,6 @@ function initPaste() {
       return;
     }
 
-    // 3. Large text paste → convert to attachment (only in message input)
     const active = document.activeElement;
     if (!active || active.id !== 'msgInput') return;
 
@@ -103,7 +99,6 @@ function initPaste() {
       renderFilePreview();
       toast(`✓ Pasted as attachment (${fmtSize(size)} • ${lines.toLocaleString()} lines)`, 'success');
     }
-    // Small text → falls through naturally to textarea
   });
 }
 
@@ -155,7 +150,6 @@ function renderFilePreview() {
     if (f.type === 'paste') {
       const text = _getFileText(f);
       const lines = text ? text.split('\n').length : 0;
-
       const icon = document.createElement('span');
       icon.className = 'fp-paste-icon'; icon.textContent = '📋';
       const preview = document.createElement('span');
@@ -166,12 +160,7 @@ function renderFilePreview() {
       const meta = document.createElement('span');
       meta.className = 'fp-paste-meta';
       meta.textContent = `${fmtSize(f.size)} • ${lines.toLocaleString()} lines`;
-
-      chip.appendChild(icon);
-      chip.appendChild(preview);
-      chip.appendChild(badge);
-      chip.appendChild(meta);
-
+      chip.appendChild(icon); chip.appendChild(preview); chip.appendChild(badge); chip.appendChild(meta);
       chip.addEventListener('click', e => {
         if (e.target.closest('.remove-file')) return;
         openPasteViewer('Pasted content', text,
@@ -185,7 +174,6 @@ function renderFilePreview() {
       const name = document.createElement('span');
       name.className = 'fp-name'; name.textContent = f.name;
       chip.appendChild(name);
-
       chip.style.cursor = 'pointer';
       chip.addEventListener('click', e => {
         if (e.target.closest('.remove-file')) return;
@@ -197,7 +185,6 @@ function renderFilePreview() {
       const name = document.createElement('span');
       name.className = 'fp-name'; name.textContent = f.name;
       chip.appendChild(name);
-
       if (f.type === 'text') {
         chip.style.cursor = 'pointer';
         chip.addEventListener('click', e => {
@@ -214,6 +201,9 @@ function renderFilePreview() {
     chip.appendChild(rm);
     bar.appendChild(chip);
   });
+
+  // Update cost preview when files change
+  if (typeof scheduleCostPreview === 'function') scheduleCostPreview();
 }
 
 function suggest(text) {

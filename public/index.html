@@ -28,6 +28,7 @@
 <link rel="stylesheet" href="/css/sidepanel.css">
 <link rel="stylesheet" href="/css/modals.css">
 <link rel="stylesheet" href="/css/misc.css">
+<link rel="stylesheet" href="/css/budget.css">
 <link rel="stylesheet" href="/css/responsive.css">
 
 
@@ -134,6 +135,7 @@
             </button>
           </div>
         </div>
+        <div id="costPreview"></div>
         <div class="input-hint">
           <span>Enter to send · Shift+Enter for newline · Paste or drag files</span>
         </div>
@@ -228,6 +230,34 @@
           <span id="tempVal">0.7</span>
         </div>
       </div>
+      <div class="form-group budget-section">
+        <div class="budget-toggle">
+          <input type="checkbox" id="budgetEnabled" onchange="_updateBudgetFieldsVis()">
+          <label for="budgetEnabled">Enable Budget Limits</label>
+        </div>
+        <div id="budgetFields" style="display:none;">
+          <div class="budget-fields">
+            <div class="form-group">
+              <label>Daily USD Limit</label>
+              <input type="number" class="form-input" id="budgetDailyUSD" placeholder="e.g. 5.00" min="0" step="0.50">
+            </div>
+            <div class="form-group">
+              <label>Overall USD Limit</label>
+              <input type="number" class="form-input" id="budgetOverallUSD" placeholder="e.g. 50.00" min="0" step="1">
+            </div>
+            <div class="form-group">
+              <label>Daily Token Limit (K)</label>
+              <input type="number" class="form-input" id="budgetDailyTokens" placeholder="e.g. 500" min="0" step="50">
+            </div>
+            <div class="form-group">
+              <label>Overall Token Limit (K)</label>
+              <input type="number" class="form-input" id="budgetOverallTokens" placeholder="e.g. 5000" min="0" step="100">
+            </div>
+          </div>
+          <div class="budget-stats" id="budgetStatsDisplay"></div>
+          <button type="button" class="budget-reset-btn" onclick="resetCostLog()">Reset cost log</button>
+        </div>
+      </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeSettings()">Cancel</button>
@@ -262,6 +292,7 @@
 <script defer src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script defer src="/js/state.js"></script>
 <script defer src="/js/utils.js"></script>
+<script defer src="/js/budget.js"></script>
 <script defer src="/js/conversations.js"></script>
 <script defer src="/js/thinking.js"></script>
 <script defer src="/js/artifacts.js"></script>

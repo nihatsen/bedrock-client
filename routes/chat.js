@@ -3,6 +3,7 @@
 const express                                = require('express');
 const { ConverseStreamCommand }              = require('@aws-sdk/client-bedrock-runtime');
 const { buildClient, buildConverseMessages } = require('../lib/bedrock');
+const { optimizeContext }                    = require('../lib/context');
 
 const router = express.Router();
 
@@ -10,12 +11,10 @@ router.post('/stream', express.json({ limit: '50mb' }), async (req, res) => {
   const {
     messages, systemPrompt, modelId, region, apiKey,
     extendedThinking, thinkingBudget, maxTokens, temperature,
+    contextRecentCount, contextMaxMessages,
   } = req.body;
 
   // ── FIX: Basic request validation ──────────────────────────────────────
-  // Previously, a missing apiKey or empty messages array would cause an opaque
-  // crash deep inside the AWS SDK or buildConverseMessages. Now we fail fast
-  // with a clear error message.
   if (!apiKey) {
     return res.status(400).json({ error: 'Missing apiKey' });
   }
@@ -26,36 +25,38 @@ router.post('/stream', express.json({ limit: '50mb' }), async (req, res) => {
   res.setHeader('Content-Type',  'text/event-stream; charset=utf-8');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection',    'keep-alive');
-  // FIX: Hint for nginx and similar reverse proxies to not buffer SSE
   res.setHeader('X-Accel-Buffering', 'no');
-  // FIX: Flush headers immediately so the client receives the SSE connection
-  // without waiting for the first data chunk. Without this, some proxies or
-  // compression middleware buffer the entire response.
   res.flushHeaders();
 
   const send = (type, data = {}) => {
     res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
-    // FIX: Flush after each SSE event if the method exists (e.g. behind compression)
     if (typeof res.flush === 'function') res.flush();
   };
 
-  console.log(`[stream] model=${modelId} thinking=${extendedThinking} budget=${thinkingBudget}`);
+  console.log(`[stream] model=${modelId} thinking=${extendedThinking} budget=${thinkingBudget} msgs=${messages.length}`);
 
   try {
-    const client   = buildClient({ region, apiKey });
-    const convMsgs = buildConverseMessages(messages);
+    const client = buildClient({ region, apiKey });
 
-    // FIX: Guard against empty conversation after filtering.
-    // buildConverseMessages strips invalid messages and enforces user-first/user-last.
-    // If everything gets filtered out, we'd send an empty messages array to Bedrock
-    // which would return a cryptic validation error.
+    // ── Server-side context optimization (safety net) ─────────────────────
+    const { messages: optimizedMsgs, stats: ctxStats } = optimizeContext(messages, {
+      recentFullCount:  contextRecentCount  || 6,
+      maxTotalMessages: contextMaxMessages  || 40,
+    });
+
+    if (ctxStats.saved > 0) {
+      console.log(`[stream] Context optimized: ~${ctxStats.saved} tokens saved, ${ctxStats.dropped} msgs dropped (${messages.length} → ${optimizedMsgs.length})`);
+    }
+
+    const convMsgs = buildConverseMessages(optimizedMsgs);
+
     if (convMsgs.length === 0) {
       send('error', { message: 'No valid messages to send (conversation may be empty)' });
       return res.end();
     }
 
-    const system   = systemPrompt ? [{ text: systemPrompt }] : undefined;
-    const model    = modelId || 'us.anthropic.claude-sonnet-4-5-20251001-v1:0';
+    const system = systemPrompt ? [{ text: systemPrompt }] : undefined;
+    const model  = modelId || 'us.anthropic.claude-sonnet-4-5-20251001-v1:0';
 
     const params = {
       modelId: model,
@@ -70,10 +71,6 @@ router.post('/stream', express.json({ limit: '50mb' }), async (req, res) => {
       params.additionalModelRequestFields = {
         thinking: { type: 'enabled', budget_tokens: budget },
       };
-      // FIX: Cap the total (maxTokens + budget) at 128000 to stay within any
-      // model's absolute output ceiling. Previously this was unbounded — a user
-      // could set maxTokens=200000 + budget=32000 = 232000 which exceeds every
-      // Bedrock model's limit and causes an API error.
       const desiredTotal = (maxTokens || 32000) + budget;
       params.inferenceConfig.maxTokens   = Math.min(desiredTotal, 128000);
       params.inferenceConfig.temperature = 1;
@@ -89,7 +86,6 @@ router.post('/stream', express.json({ limit: '50mb' }), async (req, res) => {
 
     for await (const chunk of response.stream) {
 
-      // ── contentBlockStart ──────────────────────────────────────────────
       if (chunk.contentBlockStart) {
         const start = chunk.contentBlockStart.start;
         console.log('[contentBlockStart]', JSON.stringify(start));
@@ -108,12 +104,10 @@ router.post('/stream', express.json({ limit: '50mb' }), async (req, res) => {
         }
       }
 
-      // ── contentBlockDelta ──────────────────────────────────────────────
       if (chunk.contentBlockDelta) {
         const delta = chunk.contentBlockDelta.delta;
         deltaCount++;
 
-        // LOG FIRST 5 DELTAS IN FULL so we can see the actual shape
         if (deltaCount <= 5) {
           console.log(`[delta #${deltaCount}] FULL:`, JSON.stringify(delta));
           console.log(`[delta #${deltaCount}] keys:`, Object.keys(delta || {}));
@@ -126,13 +120,12 @@ router.post('/stream', express.json({ limit: '50mb' }), async (req, res) => {
           }
         }
 
-        // Try EVERY possible thinking path
         const thinkText =
-          delta?.reasoningContent?.thinkingDelta ||    // standard path
-          delta?.reasoningContent?.text ||              // alt path 1
-          delta?.thinking?.text ||                      // alt path 2
-          delta?.thinking?.thinkingDelta ||             // alt path 3
-          delta?.thinkingDelta ||                       // alt path 4
+          delta?.reasoningContent?.thinkingDelta ||
+          delta?.reasoningContent?.text ||
+          delta?.thinking?.text ||
+          delta?.thinking?.thinkingDelta ||
+          delta?.thinkingDelta ||
           (delta?.reasoningContent && typeof delta.reasoningContent === 'string' ? delta.reasoningContent : null);
 
         if (thinkText) {
@@ -145,12 +138,10 @@ router.post('/stream', express.json({ limit: '50mb' }), async (req, res) => {
           send('thinking_delta', { text: thinkText });
 
         } else if (delta?.reasoningContent?.signature || delta?.thinking?.signature) {
-          // Encrypted signature — close thinking
           if (inThinking) { send('thinking_end'); inThinking = false; }
           console.log('[stream] signature block, closing thinking');
 
         } else if (delta?.text !== undefined) {
-          // Regular text — close thinking if open
           if (inThinking) {
             send('thinking_end');
             inThinking = false;
@@ -159,14 +150,12 @@ router.post('/stream', express.json({ limit: '50mb' }), async (req, res) => {
           send('text_delta', { text: delta.text });
 
         } else {
-          // Unknown delta shape — log it
           if (deltaCount <= 10) {
             console.log(`[delta #${deltaCount}] UNHANDLED shape:`, JSON.stringify(delta));
           }
         }
       }
 
-      // ── contentBlockStop ────────────────────────────────────────────────
       if (chunk.contentBlockStop) {
         if (inThinking) {
           send('thinking_end');
@@ -175,12 +164,7 @@ router.post('/stream', express.json({ limit: '50mb' }), async (req, res) => {
         }
       }
 
-      // ── messageStop ─────────────────────────────────────────────────────
       if (chunk.messageStop) {
-        // FIX: Ensure thinking is closed before signaling done.
-        // If the model terminates abnormally while still in a thinking block,
-        // the client's thinking spinner would spin forever because it never
-        // receives a thinking_end event.
         if (inThinking) {
           send('thinking_end');
           inThinking = false;
@@ -189,7 +173,6 @@ router.post('/stream', express.json({ limit: '50mb' }), async (req, res) => {
         send('done', { stopReason: chunk.messageStop.stopReason });
       }
 
-      // ── metadata ────────────────────────────────────────────────────────
       if (chunk.metadata) {
         send('usage', { usage: chunk.metadata.usage });
       }

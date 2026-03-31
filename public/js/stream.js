@@ -66,8 +66,6 @@ function _doRender(msgId, msg) {
   const row = document.querySelector(`[data-msg-id="${msgId}"]`); if (!row) return;
   if (!row.classList.contains('streaming')) return;
 
-  // FIX: Don't destroy DOM while user is selecting/copying text.
-  // The next text_delta will re-trigger _scheduleRender naturally.
   const sel = window.getSelection();
   if (sel && !sel.isCollapsed) {
     const mw = document.getElementById('messagesWrap');
@@ -91,8 +89,6 @@ function _doRender(msgId, msg) {
 
   _smartScrollRestore(mw, st, bot);
 }
-
-
 
 function _flushRender(msgId, msg) {
   if (_renderTimers[msgId]) { clearTimeout(_renderTimers[msgId]); delete _renderTimers[msgId]; }
@@ -141,6 +137,20 @@ function _suggestModelSwitch() {
   toast(s ? `💡 ${s}` : '💡 Try Global ↔ US variant — each has its own token quota', 'info');
 }
 
+function _showBudgetWarning(msg, isBlock) {
+  _dismissBudgetWarning();
+  const banner = document.createElement('div');
+  banner.id = 'budgetWarningBanner';
+  banner.className = 'budget-warning ' + (isBlock ? 'block' : 'warn');
+  banner.innerHTML = esc(msg) + '<button class="dismiss-btn" onclick="_dismissBudgetWarning()">✕</button>';
+  document.body.appendChild(banner);
+  if (!isBlock) setTimeout(_dismissBudgetWarning, 8000);
+}
+
+function _dismissBudgetWarning() {
+  document.getElementById('budgetWarningBanner')?.remove();
+}
+
 // ─── Send message ──────────────────────────────────────────────────────────
 async function sendMessage() {
   if (currentConvoId && streamRegistry.has(currentConvoId)) return;
@@ -150,10 +160,28 @@ async function sendMessage() {
   if (!settings.apiKey) { toast('Configure API key in Settings','error'); openSettings(); return; }
   _requestNotifPermission();
 
+  // ── Budget check ───────────────────────────────────────────────────────
+  const modelId = document.getElementById('modelSelect')?.value || currentModelId;
+  let historyMsgs = [];
+  if (currentConvoId) {
+    const c = getConvo(currentConvoId);
+    if (c) historyMsgs = c.messages.filter(m => !m._error);
+  }
+  const est = estimateConversationTokens(historyMsgs, text, pendingFiles, settings.system || '');
+  const budgetResult = checkBudget(est.inputTokens, modelId);
+
+  if (!budgetResult.allowed) {
+    _showBudgetWarning(budgetResult.reason, true);
+    toast('⛔ ' + budgetResult.reason, 'error');
+    return;
+  }
+  if (budgetResult.warning) {
+    _showBudgetWarning(budgetResult.warning, false);
+  }
+
   let convo;
 
   if (currentConvoId === null) {
-    // ── First message: create conversation now ───────────────────────────
     const id = Date.now().toString();
     const title = text ? text.slice(0, 42) + (text.length > 42 ? '…' : '') : 'New Conversation';
     convo = { id, title, messages: [], createdAt: Date.now() };
@@ -181,12 +209,12 @@ async function sendMessage() {
   pendingFiles = []; renderFilePreview();
   userScrolledUp = false; _setScrollBtnVisible(false);
 
+  if (typeof updateCostPreview === 'function') updateCostPreview();
+
   renderChatList();
 
   await runStream(currentConvoId);
 }
-
-
 
 // ─── Run stream ────────────────────────────────────────────────────────────
 async function runStream(convoId) {
@@ -199,11 +227,15 @@ async function runStream(convoId) {
   const useThink = thinkingOn && canThink;
   const budget   = thinkingBudget;
 
+  // Track which model is used for this request
+  currentModelId = modelId;
+
   const aMsg = {
     id:(Date.now()+1).toString(), role:'assistant', text:'', thinking:null,
     _thinkingBudget: useThink ? budget : 0,
     createdAt: Date.now(),
     modelName: currentModelName || 'Assistant',
+    _modelId: modelId, // stored per-message for accurate cost calc
   };
   convo.messages.push(aMsg); saveConvos();
 
@@ -266,8 +298,13 @@ async function runStream(convoId) {
       finalizeMsgEl(aMsg);
       if (!userScrolledUp) scrollBottomNow();
       if (!aMsg._error) {
+        let costStr = '';
+        if (aMsg.usage) {
+          const cost = calculateCost(aMsg.usage.inputTokens||0, aMsg.usage.outputTokens||0, aMsg._modelId || modelId);
+          costStr = ` · ${formatUSD(cost.totalCost)}`;
+        }
         const u = aMsg.usage ? ` · ${aMsg.usage.outputTokens||0} tokens` : '';
-        toast(`✓ Complete${u}`,'success'); playSound();
+        toast(`✓ Complete${u}${costStr}`,'success'); playSound();
         if (document.hidden) sendNotif('◈ Reply ready', aMsg.text.slice(0,100));
       }
     } catch(err) { console.error('[stream] Finalize:',err); }
@@ -343,16 +380,21 @@ function handleSSE(ev, convoId, msg, budget) {
 
   if (ev.type === 'usage') {
     msg.usage = { inputTokens:ev.usage?.inputTokens, outputTokens:ev.usage?.outputTokens };
-    // Record for token counter
+
+    // Use the model stored on the message (not current, in case user switched)
+    const usedModelId = msg._modelId || currentModelId;
     recordTokenUsage(msg.usage.inputTokens, msg.usage.outputTokens);
+
+    const cost = calculateCost(msg.usage.inputTokens||0, msg.usage.outputTokens||0, usedModelId);
+    msg._cost = cost.totalCost;
+
     if (!isCur) return;
     const row=getRow(); if(!row) return;
     const hdr=row.querySelector('.msg-header');
     let u=hdr?.querySelector('.msg-usage');
     if (!u&&hdr) { u=document.createElement('span');u.className='msg-usage';hdr.insertBefore(u,hdr.querySelector('.msg-actions')); }
-    if (u) u.textContent=`${ev.usage?.inputTokens||0}↑ ${ev.usage?.outputTokens||0}↓`;
+    if (u) u.textContent=`${ev.usage?.inputTokens||0}↑ ${ev.usage?.outputTokens||0}↓ · ${formatUSD(cost.totalCost)}`;
   }
-
 
   if (ev.type === 'error') {
     msg._error = ev.message;

@@ -19,8 +19,10 @@ const DEFAULT_MODEL = 'global.anthropic.claude-sonnet-4-6';
 
 let currentModelName = 'Assistant';
 
+// Tracks the currently selected model ID — updated on every model change
+let currentModelId = DEFAULT_MODEL;
+
 // ─── Fallback models shown instantly on page load ─────────────────────────
-// These are shown immediately while the live API fetch happens in background.
 const FALLBACK_MODELS = [
   { id: 'global.anthropic.claude-opus-4-6-v1',              name: '(Global) Claude Opus 4.6',    supportsThinking: true,  maxOutputTokens: 32000 },
   { id: 'global.anthropic.claude-opus-4-5-20251101-v1:0',   name: '(Global) Claude Opus 4.5',    supportsThinking: true,  maxOutputTokens: 32000 },

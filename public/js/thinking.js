@@ -45,6 +45,16 @@ function onModelChange() {
   const et = document.querySelector('.empty-title');
   if (et) et.textContent = `Bedrock · ${currentModelName}`;
 
+  // ── Track current model ID for cost calculation ─────────────────────────
+  if (sel?.value) {
+    currentModelId = sel.value;
+    settings.modelId = sel.value;
+    localStorage.setItem('brc_settings', JSON.stringify(settings));
+  }
+
+  // ── Update cost preview when model changes ──────────────────────────────
+  if (typeof scheduleCostPreview === 'function') scheduleCostPreview();
+
   const toggle = document.getElementById('thinkingToggle');
   if (toggle) {
     toggle.style.opacity       = supports ? '1' : '0.4';
@@ -70,24 +80,14 @@ function onModelChange() {
     const lbl = document.getElementById('budgetLabel');
     if (lbl) lbl.textContent = tokStr(thinkingBudget);
   }
-
-  if (sel?.value) {
-    settings.modelId = sel.value;
-    localStorage.setItem('brc_settings', JSON.stringify(settings));
-  }
 }
 
-// ─── Get LAST meaningful snippet of thinking text ─────────────────────────
-// Shows what the model is thinking RIGHT NOW (latest output)
 function _getThinkingTopic(text) {
   if (!text || !text.trim()) return '';
   const trimmed = text.trimEnd();
-  // Take last 120 chars, clean up whitespace
   let tail = trimmed.slice(-120).replace(/^\s*\n/, '').trimStart();
-  // Remove partial lines at start
   const nlIdx = tail.indexOf('\n');
   if (nlIdx > 0 && nlIdx < 20) tail = tail.slice(nlIdx + 1).trimStart();
-  // Truncate to 70 chars
   if (tail.length > 70) tail = tail.slice(-70).replace(/^\S*\s/, '');
   return tail.trim();
 }
@@ -121,7 +121,7 @@ function buildThinkingBlock(text, streaming = false, budget = 0) {
   } else {
     const est = text ? Math.round(text.length / 4) : 0;
     statusLine.textContent   = `REASONING — ${tokStr(est)} est. tokens`;
-    topicLine.style.display  = 'none'; // hide topic for finalized
+    topicLine.style.display  = 'none';
   }
 
   textWrap.appendChild(statusLine);

@@ -49,50 +49,20 @@ function downloadBlob(blob, filename) {
   setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 
-// ─── Token counter ─────────────────────────────────────────────────────────
-const _TOKEN_KEY = 'brc_token_stats';
-
-function _loadTokenStats() {
-  try { return JSON.parse(localStorage.getItem(_TOKEN_KEY)||'{}'); }
-  catch(e) { return {}; }
-}
-
-function _saveTokenStats(stats) {
-  localStorage.setItem(_TOKEN_KEY, JSON.stringify(stats));
-}
-
+// ─── Token & cost recording — delegates to budget.js ───────────────────────
 function recordTokenUsage(inputTokens, outputTokens) {
-  const stats = _loadTokenStats();
-  const today = new Date().toISOString().slice(0,10);
-  if (!stats[today]) stats[today] = { input:0, output:0, requests:0 };
-  stats[today].input    += (inputTokens  || 0);
-  stats[today].output   += (outputTokens || 0);
-  stats[today].requests += 1;
-  // Keep last 30 days
-  const keys = Object.keys(stats).sort();
-  if (keys.length > 30) delete stats[keys[0]];
-  _saveTokenStats(stats);
-  updateTokenDisplay();
-}
-
-function getTokenStats() {
-  const stats   = _loadTokenStats();
-  const today   = new Date().toISOString().slice(0,10);
-  const todayS  = stats[today] || { input:0, output:0, requests:0 };
-  const allKeys = Object.keys(stats);
-  const totIn   = allKeys.reduce((s,k) => s + (stats[k].input  || 0), 0);
-  const totOut  = allKeys.reduce((s,k) => s + (stats[k].output || 0), 0);
-  const totReq  = allKeys.reduce((s,k) => s + (stats[k].requests || 0), 0);
-  return { today: todayS, total: { input:totIn, output:totOut, requests:totReq } };
+  if (typeof recordCost === 'function') {
+    recordCost(inputTokens || 0, outputTokens || 0, currentModelId);
+  }
+  if (typeof updateBudgetDisplay === 'function') {
+    updateBudgetDisplay();
+  }
 }
 
 function updateTokenDisplay() {
-  const el = document.getElementById('tokenDisplay');
-  if (!el) return;
-  const s  = getTokenStats();
-  const td = s.today;
-  el.textContent = `Today: ${tokStr(td.input+td.output)} tokens (${td.requests} prompts)`;
-  el.title = `Today: ${td.input.toLocaleString()}↑ ${td.output.toLocaleString()}↓\nAll time: ${s.total.input.toLocaleString()}↑ ${s.total.output.toLocaleString()}↓ (${s.total.requests} prompts)`;
+  if (typeof updateBudgetDisplay === 'function') {
+    updateBudgetDisplay();
+  }
 }
 
 let _toastTimer = null;
@@ -128,7 +98,6 @@ function sendNotif(title,body,convoId) {
   setTimeout(()=>n.close(),8000);
 }
 
-// ─── Base64 UTF-8 encode/decode ────────────────────────────────────────
 function encodeUTF8Base64(text) {
   const bytes = new TextEncoder().encode(text);
   let binary = '';
@@ -147,7 +116,6 @@ function decodeBase64UTF8(b64) {
   }
 }
 
-// ─── Paste / file viewer modal ─────────────────────────────────────────
 let _pasteViewerContent = '';
 
 function openPasteViewer(title, text, meta) {
