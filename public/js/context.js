@@ -20,10 +20,14 @@ function prepareMessagesForSend(rawMessages) {
   );
 
   // Full mode — no optimization, send everything as-is
+  // FIX: Still filter out stripped files (data: undefined) to prevent
+  // Buffer.from(undefined) crash on the server
   if (mode === 'full') {
     return {
       messages: messages.map(m => ({
-        role: m.role, text: m.text, files: m.files || [],
+        role: m.role,
+        text: m.text,
+        files: (m.files || []).filter(f => f.data),
       })),
       stats: null,
     };
@@ -36,10 +40,13 @@ function prepareMessagesForSend(rawMessages) {
   const maxOldAssist = aggressive ? 300  : 800;
 
   // Small conversation — no optimization needed
+  // FIX: Still filter out stripped files
   if (messages.length <= recentCount) {
     return {
       messages: messages.map(m => ({
-        role: m.role, text: m.text, files: m.files || [],
+        role: m.role,
+        text: m.text,
+        files: (m.files || []).filter(f => f.data),
       })),
       stats: null,
     };
@@ -100,8 +107,12 @@ function prepareMessagesForSend(rawMessages) {
   }
 
   // ── 3. Recent messages: full content including files ───────────────────
+  // FIX: Filter out stripped files (f.data deleted by _stripFileData when
+  // localStorage was full). Without this, the server receives file objects
+  // with data=undefined and crashes on Buffer.from(undefined, 'base64').
   for (const m of recent) {
-    result.push({ role: m.role, text: m.text, files: m.files || [] });
+    const files = (m.files || []).filter(f => f.data);
+    result.push({ role: m.role, text: m.text, files });
   }
 
   // ── Measure optimized size ─────────────────────────────────────────────
