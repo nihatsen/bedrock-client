@@ -126,6 +126,11 @@ function _isRateLimitError(m) {
 
 function _suggestModelSwitch() {
   const sel = document.getElementById('modelSelect'); const id = sel?.value || '';
+  // If rate-limited on Bedrock, suggest the free Puter alternative
+  if (!isPuterModel(id) && id.toLowerCase().includes('claude')) {
+    toast('💡 Try a Free Claude model (Puter) — no API key or quota limits', 'info');
+    return;
+  }
   let s = '';
   if (id.startsWith('global.')) {
     const o = sel?.querySelector(`option[value="${id.replace('global.','us.')}"]`);
@@ -152,7 +157,7 @@ function _dismissBudgetWarning() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// PUTER MESSAGE BUILDER — converts our message format to Puter's format
+// PUTER MESSAGE BUILDER — converts our format to Puter's messages format
 // ═══════════════════════════════════════════════════════════════════════════
 function _buildPuterMessages(apiMsgs) {
   const puterMessages = [];
@@ -165,12 +170,12 @@ function _buildPuterMessages(apiMsgs) {
   for (const m of apiMsgs) {
     let content = m.text || '';
 
-    // Inline file content as text (Kimi via Puter is text-only)
+    // Inline file content as text (Puter API is text-only for chat)
     if (m.files?.length) {
       for (const f of m.files) {
         if (!f.data) continue;
         if (f.type === 'image') {
-          content += `\n[Image: ${f.name} — image input not supported with this model]`;
+          content += `\n[Image: ${f.name} — image uploads not supported in this mode]`;
         } else {
           try {
             const decoded = typeof decodeBase64UTF8 === 'function'
@@ -204,7 +209,7 @@ function _buildPuterMessages(apiMsgs) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// PUTER STREAM — runs Kimi models client-side via puter.ai.chat()
+// PUTER STREAM — runs Claude/Kimi models client-side via puter.ai.chat()
 // ═══════════════════════════════════════════════════════════════════════════
 async function runPuterStream(convoId) {
   const convo = getConvo(convoId);
@@ -212,7 +217,7 @@ async function runPuterStream(convoId) {
 
   const opt      = document.getElementById('modelSelect').selectedOptions[0];
   const modelId  = opt?.value;
-  const modelMax = parseInt(opt?.dataset.maxOutputTokens || '8192');
+  const puterModelId = getPuterModelId(modelId);  // strip "puter:" prefix
 
   currentModelId = modelId;
 
@@ -223,7 +228,7 @@ async function runPuterStream(convoId) {
     thinking: null,
     _thinkingBudget: 0,
     createdAt: Date.now(),
-    modelName: currentModelName || 'Kimi',
+    modelName: currentModelName || 'Assistant',
     _modelId: modelId,
   };
   convo.messages.push(aMsg);
@@ -240,38 +245,35 @@ async function runPuterStream(convoId) {
   const ac = new AbortController();
   streamRegistry.set(convoId, { abortController: ac, assistantMsgId: aMsg.id });
 
-  // Context optimization (same as Bedrock path)
+  // Context optimization
   const { messages: apiMsgs, stats: ctxStats } = prepareMessagesForSend(
-    convo.messages.slice(0, -1)  // exclude the empty assistant placeholder
+    convo.messages.slice(0, -1)
   );
 
   if (ctxStats && ctxStats.savedTokenEst > 0) {
-    console.log(
-      `[puter-context] Optimized: ~${tokStr(ctxStats.savedTokenEst)} tokens saved (${ctxStats.savedPct}%)`
-    );
+    console.log(`[puter-context] Optimized: ~${tokStr(ctxStats.savedTokenEst)} tokens saved (${ctxStats.savedPct}%)`);
   }
 
   const puterMessages = _buildPuterMessages(apiMsgs);
 
-  console.log(`[puter-stream] model=${modelId} msgs=${puterMessages.length}`);
+  console.log(`[puter-stream] model=${puterModelId} msgs=${puterMessages.length}`);
 
   const saveInterval = setInterval(() => saveConvos(), 2000);
 
   try {
-    // Check Puter.js availability
     if (typeof puter === 'undefined' || !puter?.ai?.chat) {
       throw new Error('Puter.js is still loading. Please wait a moment and try again.');
     }
 
     const response = await puter.ai.chat(puterMessages, {
-      model: modelId,
+      model: puterModelId,
       stream: true,
     });
 
     let totalOutputChars = 0;
 
-    // Handle streaming response (async iterator)
     if (response && typeof response[Symbol.asyncIterator] === 'function') {
+      // ── Streaming response ─────────────────────────────────────────────
       for await (const part of response) {
         if (ac.signal.aborted) break;
 
@@ -288,10 +290,20 @@ async function runPuterStream(convoId) {
         }
       }
     } else {
-      // Non-streaming fallback
-      const text = typeof response === 'string'
-        ? response
-        : response?.message?.content || response?.text || String(response || '');
+      // ── Non-streaming fallback — handle both Claude and Kimi formats ───
+      let text = '';
+      if (typeof response === 'string') {
+        text = response;
+      } else if (response?.message?.content?.[0]?.text) {
+        // Puter Claude format: response.message.content[0].text
+        text = response.message.content[0].text;
+      } else if (response?.message?.content && typeof response.message.content === 'string') {
+        text = response.message.content;
+      } else if (response?.text) {
+        text = response.text;
+      } else {
+        text = String(response || '');
+      }
       aMsg.text = text;
       totalOutputChars = text.length;
     }
@@ -299,23 +311,19 @@ async function runPuterStream(convoId) {
     if (!ac.signal.aborted) {
       aMsg.stopReason = 'end_turn';
 
-      // Estimate token usage (Puter doesn't provide exact counts)
+      // Estimate token usage (Puter doesn't return exact counts)
       const inputText = puterMessages.map(m => m.content).join(' ');
       const estInputTokens  = Math.ceil(inputText.length / 3.8);
       const estOutputTokens = Math.ceil(totalOutputChars / 3.8);
-      aMsg.usage = {
-        inputTokens:  estInputTokens,
-        outputTokens: estOutputTokens,
-      };
+      aMsg.usage = { inputTokens: estInputTokens, outputTokens: estOutputTokens };
 
-      // Record usage for budget tracking (cost will be $0 for Kimi)
       recordTokenUsage(estInputTokens, estOutputTokens);
     }
 
   } catch (e) {
     if (e.name !== 'AbortError' && !ac.signal.aborted) {
       aMsg._error = e.message || 'Puter API error';
-      toast('Kimi error: ' + aMsg._error, 'error');
+      toast('Error: ' + aMsg._error, 'error');
     }
   }
 
@@ -333,7 +341,7 @@ async function runPuterStream(convoId) {
           const cost = calculateCost(aMsg.usage.inputTokens || 0, aMsg.usage.outputTokens || 0, aMsg._modelId || modelId);
           costStr = cost.totalCost > 0 ? ` · ${formatUSD(cost.totalCost)}` : ' · Free';
         }
-        const u = aMsg.usage ? ` · ${aMsg.usage.outputTokens || 0} tokens` : '';
+        const u = aMsg.usage ? ` · ~${aMsg.usage.outputTokens || 0} tokens` : '';
         toast(`✓ Complete${u}${costStr}`, 'success');
         playSound();
         if (document.hidden) sendNotif('◈ Reply ready', aMsg.text.slice(0, 100));
@@ -359,7 +367,7 @@ async function runPuterStream(convoId) {
   if (typeof updateBudgetDisplay === 'function') updateBudgetDisplay();
 }
 
-// ─── Send message ──────────────────────────────────────────────────────────
+// ─── Send message — dispatches to Puter or Bedrock ─────────────────────────
 async function sendMessage() {
   if (currentConvoId && streamRegistry.has(currentConvoId)) return;
   const input = document.getElementById('msgInput');
@@ -371,7 +379,7 @@ async function sendMessage() {
 
   // API key only required for Bedrock models
   if (!usingPuter && !settings.apiKey) {
-    toast('Configure API key in Settings (or select a free Kimi model)', 'error');
+    toast('Configure API key in Settings, or select a Free model (Puter)', 'error');
     openSettings();
     return;
   }
@@ -430,7 +438,7 @@ async function sendMessage() {
 
   renderChatList();
 
-  // ── Dispatch to correct provider ───────────────────────────────────────
+  // ── Dispatch ───────────────────────────────────────────────────────────
   if (usingPuter) {
     await runPuterStream(currentConvoId);
   } else {
@@ -449,12 +457,8 @@ async function runStream(convoId) {
   const useThink = thinkingOn && canThink;
   const budget   = thinkingBudget;
 
-  // Redirect Puter models to their handler
-  if (isPuterModel(modelId)) {
-    return runPuterStream(convoId);
-  }
+  if (isPuterModel(modelId)) return runPuterStream(convoId);
 
-  // Track which model is used for this request
   currentModelId = modelId;
 
   const aMsg = {

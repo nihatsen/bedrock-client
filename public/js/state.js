@@ -18,27 +18,45 @@ const streamRegistry = new Map();
 const DEFAULT_MODEL = 'global.anthropic.claude-sonnet-4-6';
 
 let currentModelName = 'Assistant';
-
-// Tracks the currently selected model ID — updated on every model change
 let currentModelId = DEFAULT_MODEL;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// PUTER / KIMI MODEL SUPPORT
+// PUTER MODEL SUPPORT — all IDs prefixed with "puter:" to avoid conflicts
+// with Bedrock model IDs. The prefix is stripped before calling puter.ai.chat().
 // ═══════════════════════════════════════════════════════════════════════════
-const KIMI_MODELS = [
-  { id: 'moonshotai/kimi-k2.5',        name: 'Kimi K2.5 (Free)',         supportsThinking: false, maxOutputTokens: 8192, provider: 'puter' },
-  { id: 'moonshotai/kimi-k2',           name: 'Kimi K2 (Free)',           supportsThinking: false, maxOutputTokens: 8192, provider: 'puter' },
-  { id: 'moonshotai/kimi-k2-thinking',  name: 'Kimi K2 Thinking (Free)', supportsThinking: false, maxOutputTokens: 8192, provider: 'puter' },
-  { id: 'moonshotai/kimi-k2-0905',      name: 'Kimi K2 0905 (Free)',     supportsThinking: false, maxOutputTokens: 8192, provider: 'puter' },
+const PUTER_MODELS = [
+  // ── Claude via Puter (free) ────────────────────────────────────────────
+  { id: 'puter:claude-sonnet-4-6', name: 'Claude Sonnet 4.6 (Free)', supportsThinking: false, maxOutputTokens: 16384, provider: 'puter' },
+  { id: 'puter:claude-opus-4-6',   name: 'Claude Opus 4.6 (Free)',   supportsThinking: false, maxOutputTokens: 32000, provider: 'puter' },
+  { id: 'puter:claude-opus-4-5',   name: 'Claude Opus 4.5 (Free)',   supportsThinking: false, maxOutputTokens: 32000, provider: 'puter' },
+  { id: 'puter:claude-sonnet-4-5', name: 'Claude Sonnet 4.5 (Free)', supportsThinking: false, maxOutputTokens: 16384, provider: 'puter' },
+  { id: 'puter:claude-haiku-4-5',  name: 'Claude Haiku 4.5 (Free)',  supportsThinking: false, maxOutputTokens: 16384, provider: 'puter' },
+  { id: 'puter:claude-opus-4-1',   name: 'Claude Opus 4.1 (Free)',   supportsThinking: false, maxOutputTokens: 32000, provider: 'puter' },
+  { id: 'puter:claude-opus-4',     name: 'Claude Opus 4 (Free)',     supportsThinking: false, maxOutputTokens: 32000, provider: 'puter' },
+  { id: 'puter:claude-sonnet-4',   name: 'Claude Sonnet 4 (Free)',   supportsThinking: false, maxOutputTokens: 16384, provider: 'puter' },
+  { id: 'puter:claude-3-7-sonnet', name: 'Claude 3.7 Sonnet (Free)', supportsThinking: false, maxOutputTokens: 64000, provider: 'puter' },
+  { id: 'puter:claude-3-5-sonnet', name: 'Claude 3.5 Sonnet (Free)', supportsThinking: false, maxOutputTokens: 8192,  provider: 'puter' },
+  { id: 'puter:claude-3-haiku',    name: 'Claude 3 Haiku (Free)',    supportsThinking: false, maxOutputTokens: 8192,  provider: 'puter' },
+
+  // ── Kimi via Puter (free) ──────────────────────────────────────────────
+  { id: 'puter:moonshotai/kimi-k2.5',       name: 'Kimi K2.5 (Free)',         supportsThinking: false, maxOutputTokens: 8192, provider: 'puter' },
+  { id: 'puter:moonshotai/kimi-k2',          name: 'Kimi K2 (Free)',           supportsThinking: false, maxOutputTokens: 8192, provider: 'puter' },
+  { id: 'puter:moonshotai/kimi-k2-thinking', name: 'Kimi K2 Thinking (Free)', supportsThinking: false, maxOutputTokens: 8192, provider: 'puter' },
+  { id: 'puter:moonshotai/kimi-k2-0905',     name: 'Kimi K2 0905 (Free)',     supportsThinking: false, maxOutputTokens: 8192, provider: 'puter' },
 ];
 
 /** Returns true if modelId is served via Puter.js (client-side) */
 function isPuterModel(modelId) {
   if (!modelId) return false;
-  return modelId.startsWith('moonshotai/');
+  return modelId.startsWith('puter:');
 }
 
-// ─── Fallback models shown instantly on page load ─────────────────────────
+/** Strips the "puter:" prefix to get the ID that puter.ai.chat() expects */
+function getPuterModelId(modelId) {
+  return modelId.replace(/^puter:/, '');
+}
+
+// ─── Fallback Bedrock models shown instantly on page load ─────────────────
 const FALLBACK_MODELS = [
   { id: 'global.anthropic.claude-opus-4-6-v1',              name: '(Global) Claude Opus 4.6',    supportsThinking: true,  maxOutputTokens: 32000 },
   { id: 'global.anthropic.claude-opus-4-5-20251101-v1:0',   name: '(Global) Claude Opus 4.5',    supportsThinking: true,  maxOutputTokens: 32000 },

@@ -64,7 +64,6 @@ function init() {
   initDragDrop();
   initPaste();
 
-  // Cost preview: update as user types
   const msgInput = document.getElementById('msgInput');
   if (msgInput) {
     msgInput.addEventListener('input', () => {
@@ -72,7 +71,6 @@ function init() {
     });
   }
 
-  // Initialize budget display
   if (typeof updateBudgetDisplay === 'function') updateBudgetDisplay();
 
   if (settings.apiKey) _loadModelsBackground();
@@ -84,7 +82,7 @@ function init() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// MODEL SELECT — uses <optgroup> to separate Bedrock and Kimi models
+// MODEL SELECT — <optgroup> for Bedrock + Puter Claude + Puter Kimi
 // ═══════════════════════════════════════════════════════════════════════════
 function _populateModelSelect(bedrockModels) {
   const sel = document.getElementById('modelSelect');
@@ -93,7 +91,7 @@ function _populateModelSelect(bedrockModels) {
   const savedId = settings.modelId || DEFAULT_MODEL;
   sel.innerHTML = '';
 
-  // ── Bedrock models (optgroup) ──────────────────────────────────────────
+  // ── Bedrock optgroup ───────────────────────────────────────────────────
   if (bedrockModels.length > 0) {
     const grp = document.createElement('optgroup');
     grp.label = '☁ Amazon Bedrock';
@@ -110,20 +108,41 @@ function _populateModelSelect(bedrockModels) {
     sel.appendChild(grp);
   }
 
-  // ── Kimi / Puter models (always available) ─────────────────────────────
-  const kimiGrp = document.createElement('optgroup');
-  kimiGrp.label = '🌙 Kimi (Free via Puter)';
-  KIMI_MODELS.forEach(m => {
-    const opt = document.createElement('option');
-    opt.value = m.id;
-    opt.textContent = m.name;
-    opt.dataset.supportsThinking = m.supportsThinking || false;
-    opt.dataset.maxOutputTokens  = m.maxOutputTokens || 8192;
-    opt.dataset.provider         = 'puter';
-    if (m.id === savedId) opt.selected = true;
-    kimiGrp.appendChild(opt);
-  });
-  sel.appendChild(kimiGrp);
+  // ── Split Puter models into Claude and Kimi groups ─────────────────────
+  const puterClaude = PUTER_MODELS.filter(m => m.id.includes('claude'));
+  const puterKimi   = PUTER_MODELS.filter(m => !m.id.includes('claude'));
+
+  if (puterClaude.length > 0) {
+    const grp = document.createElement('optgroup');
+    grp.label = '🌐 Free Claude (Puter)';
+    puterClaude.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = m.name;
+      opt.dataset.supportsThinking = m.supportsThinking || false;
+      opt.dataset.maxOutputTokens  = m.maxOutputTokens || 8192;
+      opt.dataset.provider         = 'puter';
+      if (m.id === savedId) opt.selected = true;
+      grp.appendChild(opt);
+    });
+    sel.appendChild(grp);
+  }
+
+  if (puterKimi.length > 0) {
+    const grp = document.createElement('optgroup');
+    grp.label = '🌙 Free Kimi (Puter)';
+    puterKimi.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = m.name;
+      opt.dataset.supportsThinking = m.supportsThinking || false;
+      opt.dataset.maxOutputTokens  = m.maxOutputTokens || 8192;
+      opt.dataset.provider         = 'puter';
+      if (m.id === savedId) opt.selected = true;
+      grp.appendChild(opt);
+    });
+    sel.appendChild(grp);
+  }
 
   // Ensure something is selected
   if (!sel.querySelector(`option[value="${CSS.escape(savedId)}"]`) && sel.options.length > 0) {
@@ -142,9 +161,11 @@ async function _loadModelsBackground() {
     const data = await res.json();
     const models = data.models || [];
     if (!models.length) return;
-    if (models.length > FALLBACK_MODELS.length || data.source === 'bedrock') {
-      console.log(`[models] Live: ${models.length} (${data.source})`);
-      _populateModelSelect(models);
+    // Filter out any puter: models from server response (we add them client-side)
+    const bedrockOnly = models.filter(m => !m.id.startsWith('puter:'));
+    if (bedrockOnly.length > FALLBACK_MODELS.length || data.source === 'bedrock') {
+      console.log(`[models] Live: ${bedrockOnly.length} (${data.source})`);
+      _populateModelSelect(bedrockOnly);
       applyThinkingState();
     }
   } catch(e) { console.warn('[models] Background fetch failed:', e.message); }
@@ -158,7 +179,8 @@ async function loadModels() {
     const res = await fetch('/api/models', { headers });
     const data = await res.json();
     const models = data.models || [];
-    if (models.length) { _populateModelSelect(models); applyThinkingState(); }
+    const bedrockOnly = models.filter(m => !m.id.startsWith('puter:'));
+    if (bedrockOnly.length) { _populateModelSelect(bedrockOnly); applyThinkingState(); }
   } catch(e) { console.error('loadModels:', e); toast('Could not reload models','error'); }
 }
 

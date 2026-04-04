@@ -49,20 +49,31 @@ const DEFAULT_PRICING = { input: 3.00, output: 15.00, name: 'Unknown' };
 // ═══════════════════════════════════════════════════════════════════════════
 function _getPricing(modelId) {
   if (!modelId) return DEFAULT_PRICING;
+
+  // All Puter models are free
+  if (isPuterModel(modelId)) {
+    const lo = modelId.toLowerCase();
+    if (lo.includes('opus'))         return { input: 0, output: 0, name: 'Opus (Free/Puter)' };
+    if (lo.includes('sonnet'))       return { input: 0, output: 0, name: 'Sonnet (Free/Puter)' };
+    if (lo.includes('haiku'))        return { input: 0, output: 0, name: 'Haiku (Free/Puter)' };
+    if (lo.includes('kimi-k2.5'))    return { input: 0, output: 0, name: 'Kimi K2.5 (Free)' };
+    if (lo.includes('kimi-k2-think'))return { input: 0, output: 0, name: 'Kimi K2 Think (Free)' };
+    if (lo.includes('kimi'))         return { input: 0, output: 0, name: 'Kimi (Free)' };
+    return { input: 0, output: 0, name: 'Free (Puter)' };
+  }
+
   const lo = modelId.toLowerCase();
   let bestKey = null, bestLen = 0;
   for (const key of Object.keys(MODEL_PRICING)) {
     if (lo.includes(key) && key.length > bestLen) { bestKey = key; bestLen = key.length; }
   }
   if (bestKey) return MODEL_PRICING[bestKey];
-  if (lo.includes('kimi'))    return { input: 0, output: 0, name: 'Kimi (Free)' };
   if (lo.includes('claude'))  return { input: 3.00,  output: 15.00, name: 'Claude' };
   if (lo.includes('nova'))    return { input: 0.80,  output: 3.20,  name: 'Nova'   };
   if (lo.includes('llama'))   return { input: 0.72,  output: 0.72,  name: 'Llama'  };
   return DEFAULT_PRICING;
 }
 
-function getPricingForModel(modelId) { return _getPricing(modelId); }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TOKEN ESTIMATION

@@ -35,7 +35,6 @@ function applyThinkingState() {
   label.textContent = tokStr(thinkingBudget);
 }
 
-
 function onModelChange() {
   const sel    = document.getElementById('modelSelect');
   const opt    = sel?.selectedOptions[0];
@@ -43,29 +42,31 @@ function onModelChange() {
   const newMax   = parseInt(opt?.dataset.maxOutputTokens || '32000');
 
   const rawName = opt?.textContent || 'Assistant';
-  currentModelName = rawName.replace(/\s*\(.*?\)\s*$/, '').trim();
+  currentModelName = rawName.replace(/\s*\(Free\)\s*$/i, '').replace(/\s*\(.*?\)\s*$/, '').trim();
 
   // ── Update page title based on provider ─────────────────────────────────
-  const provider = isPuterModel(sel?.value) ? 'Puter' : 'Bedrock';
+  const usingPuter = isPuterModel(sel?.value);
+  const provider   = usingPuter ? 'Puter' : 'Bedrock';
   document.title = `${provider} · ${currentModelName}`;
   const et = document.querySelector('.empty-title');
   if (et) et.textContent = `${provider} · ${currentModelName}`;
 
-  // ── Track current model ID for cost calculation ─────────────────────────
+  // ── Track current model ID ──────────────────────────────────────────────
   if (sel?.value) {
     currentModelId = sel.value;
     settings.modelId = sel.value;
     localStorage.setItem('brc_settings', JSON.stringify(settings));
   }
 
-  // ── Update cost preview when model changes ──────────────────────────────
   if (typeof scheduleCostPreview === 'function') scheduleCostPreview();
 
   const toggle = document.getElementById('thinkingToggle');
   if (toggle) {
-    toggle.style.opacity       = supports ? '1' : '0.4';
-    toggle.style.pointerEvents = supports ? '' : 'none';
-    if (!supports && thinkingOn) {
+    // Extended thinking only available on Bedrock models that support it
+    const canThink = supports && !usingPuter;
+    toggle.style.opacity       = canThink ? '1' : '0.4';
+    toggle.style.pointerEvents = canThink ? '' : 'none';
+    if (!canThink && thinkingOn) {
       thinkingOn = false;
       localStorage.setItem('brc_thinking_on', 'false');
       toggle.classList.remove('active');
@@ -87,6 +88,7 @@ function onModelChange() {
     if (lbl) lbl.textContent = tokStr(thinkingBudget);
   }
 }
+
 
 
 function _getThinkingTopic(text) {
