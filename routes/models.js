@@ -91,6 +91,13 @@ const FALLBACK_MODELS = [
   { id: 'meta.llama3-1-8b-instruct-v1:0',                    name: 'Llama 3.1 8B',                supportsThinking: false, maxOutputTokens: 8192  },
   { id: 'meta.llama3-70b-instruct-v1:0',                     name: 'Llama 3 70B',                 supportsThinking: false, maxOutputTokens: 8192  },
   { id: 'meta.llama3-8b-instruct-v1:0',                      name: 'Llama 3 8B',                  supportsThinking: false, maxOutputTokens: 8192  },
+  
+  // ── Kimi (free via Puter.js — client-side only) ──────────────────────────
+  { id: 'moonshotai/kimi-k2.5',        name: 'Kimi K2.5 (Free)',         supportsThinking: false, maxOutputTokens: 8192 },
+  { id: 'moonshotai/kimi-k2',           name: 'Kimi K2 (Free)',           supportsThinking: false, maxOutputTokens: 8192 },
+  { id: 'moonshotai/kimi-k2-thinking',  name: 'Kimi K2 Thinking (Free)', supportsThinking: false, maxOutputTokens: 8192 },
+  { id: 'moonshotai/kimi-k2-0905',      name: 'Kimi K2 0905 (Free)',     supportsThinking: false, maxOutputTokens: 8192 },
+
 ];
 
 // ─── Cache for dynamic results ────────────────────────────────────────────
@@ -223,12 +230,20 @@ router.get('/', async (req, res) => {
   const apiKey = req.headers['x-api-key'];
   const region = req.headers['x-region'] || process.env.AWS_REGION || 'us-east-1';
 
+  // Kimi models are always appended (they run client-side via Puter.js)
+  const KIMI = [
+    { id: 'moonshotai/kimi-k2.5',        name: 'Kimi K2.5 (Free)',         supportsThinking: false, maxOutputTokens: 8192 },
+    { id: 'moonshotai/kimi-k2',           name: 'Kimi K2 (Free)',           supportsThinking: false, maxOutputTokens: 8192 },
+    { id: 'moonshotai/kimi-k2-thinking',  name: 'Kimi K2 Thinking (Free)', supportsThinking: false, maxOutputTokens: 8192 },
+    { id: 'moonshotai/kimi-k2-0905',      name: 'Kimi K2 0905 (Free)',     supportsThinking: false, maxOutputTokens: 8192 },
+  ];
+
   if (apiKey) {
     const cacheKey = `${apiKey.slice(-8)}_${region}`;
     const now      = Date.now();
 
     if (_cache && _cacheKey === cacheKey && now - _cacheTime < CACHE_TTL) {
-      return res.json({ models: _cache, source: 'bedrock-cached' });
+      return res.json({ models: [..._cache, ...KIMI], source: 'bedrock-cached' });
     }
 
     try {
@@ -237,14 +252,17 @@ router.get('/', async (req, res) => {
         _cache     = dynamic;
         _cacheKey  = cacheKey;
         _cacheTime = now;
-        return res.json({ models: dynamic, source: 'bedrock' });
+        return res.json({ models: [...dynamic, ...KIMI], source: 'bedrock' });
       }
     } catch (e) {
       console.warn('[models] Dynamic fetch error:', e.message);
     }
   }
 
-  return res.json({ models: FALLBACK_MODELS, source: 'fallback' });
+  // Filter out Kimi from FALLBACK_MODELS (they'll be added separately)
+  const bedrockFallback = FALLBACK_MODELS.filter(m => !m.id.startsWith('moonshotai/'));
+  return res.json({ models: [...bedrockFallback, ...KIMI], source: 'fallback' });
 });
+
 
 module.exports = router;

@@ -76,27 +76,57 @@ function init() {
   if (typeof updateBudgetDisplay === 'function') updateBudgetDisplay();
 
   if (settings.apiKey) _loadModelsBackground();
-  setTimeout(() => { if (!settings.apiKey) openSettings(); }, 300);
+
+  // Only auto-open settings if no API key AND a Bedrock model is selected
+  setTimeout(() => {
+    if (!settings.apiKey && !isPuterModel(currentModelId)) openSettings();
+  }, 300);
 }
 
-function _populateModelSelect(models) {
+// ═══════════════════════════════════════════════════════════════════════════
+// MODEL SELECT — uses <optgroup> to separate Bedrock and Kimi models
+// ═══════════════════════════════════════════════════════════════════════════
+function _populateModelSelect(bedrockModels) {
   const sel = document.getElementById('modelSelect');
   if (!sel) return;
 
   const savedId = settings.modelId || DEFAULT_MODEL;
   sel.innerHTML = '';
 
-  models.forEach(m => {
+  // ── Bedrock models (optgroup) ──────────────────────────────────────────
+  if (bedrockModels.length > 0) {
+    const grp = document.createElement('optgroup');
+    grp.label = '☁ Amazon Bedrock';
+    bedrockModels.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = m.name;
+      opt.dataset.supportsThinking = m.supportsThinking;
+      opt.dataset.maxOutputTokens  = m.maxOutputTokens || 32000;
+      opt.dataset.provider         = 'bedrock';
+      if (m.id === savedId) opt.selected = true;
+      grp.appendChild(opt);
+    });
+    sel.appendChild(grp);
+  }
+
+  // ── Kimi / Puter models (always available) ─────────────────────────────
+  const kimiGrp = document.createElement('optgroup');
+  kimiGrp.label = '🌙 Kimi (Free via Puter)';
+  KIMI_MODELS.forEach(m => {
     const opt = document.createElement('option');
     opt.value = m.id;
     opt.textContent = m.name;
-    opt.dataset.supportsThinking = m.supportsThinking;
-    opt.dataset.maxOutputTokens  = m.maxOutputTokens || 32000;
+    opt.dataset.supportsThinking = m.supportsThinking || false;
+    opt.dataset.maxOutputTokens  = m.maxOutputTokens || 8192;
+    opt.dataset.provider         = 'puter';
     if (m.id === savedId) opt.selected = true;
-    sel.appendChild(opt);
+    kimiGrp.appendChild(opt);
   });
+  sel.appendChild(kimiGrp);
 
-  if (!sel.querySelector(`option[value="${savedId}"]`) && sel.options.length > 0) {
+  // Ensure something is selected
+  if (!sel.querySelector(`option[value="${CSS.escape(savedId)}"]`) && sel.options.length > 0) {
     sel.selectedIndex = 0;
   }
   onModelChange();

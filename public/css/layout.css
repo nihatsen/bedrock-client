@@ -63,6 +63,22 @@
 .topbar-model { flex-shrink: 1; min-width: 0; overflow: hidden; }
 .topbar-model select { background: var(--bg3); border: 1px solid var(--border2); color: var(--text0); font-family: var(--mono); font-size: 11px; padding: 5px 10px; border-radius: 6px; cursor: pointer; outline: none; max-width: 100%; min-width: 0; }
 .topbar-model select option { background: var(--bg3); }
+.topbar-model select optgroup {
+  color: var(--text2);
+  font-size: 10px;
+  font-weight: 700;
+  font-family: var(--mono);
+  letter-spacing: 0.04em;
+  background: var(--bg2);
+}
+.topbar-model select optgroup option {
+  color: var(--text0);
+  font-weight: 400;
+  font-size: 11px;
+  background: var(--bg3);
+  padding: 2px 6px;
+}
+
 .topbar-thinking { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 20px; background: var(--bg3); border: 1px solid var(--border2); cursor: pointer; font-size: 11px; font-family: var(--mono); color: var(--text2); transition: all 0.15s; user-select: none; flex-shrink: 0; white-space: nowrap; min-height: 28px; }
 .topbar-thinking.active { background: var(--think-bg); border-color: var(--think); color: var(--think); }
 .topbar-thinking:hover:not(.active) { border-color: var(--think); color: var(--think); }

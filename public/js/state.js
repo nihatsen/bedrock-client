@@ -22,6 +22,22 @@ let currentModelName = 'Assistant';
 // Tracks the currently selected model ID — updated on every model change
 let currentModelId = DEFAULT_MODEL;
 
+// ═══════════════════════════════════════════════════════════════════════════
+// PUTER / KIMI MODEL SUPPORT
+// ═══════════════════════════════════════════════════════════════════════════
+const KIMI_MODELS = [
+  { id: 'moonshotai/kimi-k2.5',        name: 'Kimi K2.5 (Free)',         supportsThinking: false, maxOutputTokens: 8192, provider: 'puter' },
+  { id: 'moonshotai/kimi-k2',           name: 'Kimi K2 (Free)',           supportsThinking: false, maxOutputTokens: 8192, provider: 'puter' },
+  { id: 'moonshotai/kimi-k2-thinking',  name: 'Kimi K2 Thinking (Free)', supportsThinking: false, maxOutputTokens: 8192, provider: 'puter' },
+  { id: 'moonshotai/kimi-k2-0905',      name: 'Kimi K2 0905 (Free)',     supportsThinking: false, maxOutputTokens: 8192, provider: 'puter' },
+];
+
+/** Returns true if modelId is served via Puter.js (client-side) */
+function isPuterModel(modelId) {
+  if (!modelId) return false;
+  return modelId.startsWith('moonshotai/');
+}
+
 // ─── Fallback models shown instantly on page load ─────────────────────────
 const FALLBACK_MODELS = [
   { id: 'global.anthropic.claude-opus-4-6-v1',              name: '(Global) Claude Opus 4.6',    supportsThinking: true,  maxOutputTokens: 32000 },

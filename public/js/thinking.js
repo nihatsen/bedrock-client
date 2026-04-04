@@ -35,6 +35,7 @@ function applyThinkingState() {
   label.textContent = tokStr(thinkingBudget);
 }
 
+
 function onModelChange() {
   const sel    = document.getElementById('modelSelect');
   const opt    = sel?.selectedOptions[0];
@@ -43,9 +44,12 @@ function onModelChange() {
 
   const rawName = opt?.textContent || 'Assistant';
   currentModelName = rawName.replace(/\s*\(.*?\)\s*$/, '').trim();
-  document.title = `Bedrock · ${currentModelName}`;
+
+  // ── Update page title based on provider ─────────────────────────────────
+  const provider = isPuterModel(sel?.value) ? 'Puter' : 'Bedrock';
+  document.title = `${provider} · ${currentModelName}`;
   const et = document.querySelector('.empty-title');
-  if (et) et.textContent = `Bedrock · ${currentModelName}`;
+  if (et) et.textContent = `${provider} · ${currentModelName}`;
 
   // ── Track current model ID for cost calculation ─────────────────────────
   if (sel?.value) {
@@ -83,6 +87,7 @@ function onModelChange() {
     if (lbl) lbl.textContent = tokStr(thinkingBudget);
   }
 }
+
 
 function _getThinkingTopic(text) {
   if (!text || !text.trim()) return '';

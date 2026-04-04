@@ -35,6 +35,11 @@ const MODEL_PRICING = {
   'llama3-1-8b':          { input: 0.22,  output: 0.22,   name: 'Llama 3.1 8B'     },
   'llama3-70b':           { input: 0.72,  output: 0.72,   name: 'Llama 3 70B'      },
   'llama3-8b':            { input: 0.30,  output: 0.40,   name: 'Llama 3 8B'       },
+    // ── Kimi (free via Puter) ──────────────────────────────────────────────
+  'kimi-k2.5':           { input: 0, output: 0, name: 'Kimi K2.5 (Free)'      },
+  'kimi-k2-thinking':    { input: 0, output: 0, name: 'Kimi K2 Thinking (Free)' },
+  'kimi-k2-0905':        { input: 0, output: 0, name: 'Kimi K2 0905 (Free)'   },
+  'kimi-k2':             { input: 0, output: 0, name: 'Kimi K2 (Free)'        }
 };
 
 const DEFAULT_PRICING = { input: 3.00, output: 15.00, name: 'Unknown' };
@@ -50,6 +55,7 @@ function _getPricing(modelId) {
     if (lo.includes(key) && key.length > bestLen) { bestKey = key; bestLen = key.length; }
   }
   if (bestKey) return MODEL_PRICING[bestKey];
+  if (lo.includes('kimi'))    return { input: 0, output: 0, name: 'Kimi (Free)' };
   if (lo.includes('claude'))  return { input: 3.00,  output: 15.00, name: 'Claude' };
   if (lo.includes('nova'))    return { input: 0.80,  output: 3.20,  name: 'Nova'   };
   if (lo.includes('llama'))   return { input: 0.72,  output: 0.72,  name: 'Llama'  };
